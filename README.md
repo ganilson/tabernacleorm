@@ -92,6 +92,27 @@ async def create_user(data: dict):
     return {"id": user.id}
 ```
 
+### Connecting to read and write replicas
+
+```python
+from fastapi import FastAPI
+from tabernacleorm import connect
+
+app = FastAPI()
+
+@app.on_event("startup")
+async def startup():
+    db = connect(
+        engine="postgresql",
+        write={"url": "postgresql://master:5432/db"},
+        read=[
+            {"url": "postgresql://slave1:5432/db"},
+            {"url": "postgresql://slave2:5432/db"}
+         ]
+    )
+    await db.connect()
+```
+
 ### 2. Desktop Applications (Tkinter)
 You can use TabernacleORM in desktop apps to handle local data (SQLite) or cloud data (MongoDB/Postgres).
 *Note: Since Tkinter is synchronous, run async ORM calls in a separate thread or use a loop integration library like `async_tkinter_loop`.*
