@@ -3,6 +3,9 @@ Example usage of TabernacleORM.
 
 Run this file to see TabernacleORM in action:
     python examples/basic_usage.py
+
+This example demonstrates the basic usage of TabernacleORM.
+
 """
 
 from tabernacleorm import (

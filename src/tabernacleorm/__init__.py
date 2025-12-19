@@ -18,7 +18,7 @@ from .fields import (
 from .query import QuerySet
 
 __version__ = "0.1.0"
-__author__ = "Your Name"
+__author__ = "Ganilson Garcia"
 __all__ = [
     "Database",
     "Model",

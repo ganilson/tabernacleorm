@@ -152,7 +152,7 @@ manager.migrate()
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/tabernacleorm.git
+git clone https://github.com/ganilson/tabernacleorm.git
 cd tabernacleorm
 
 # Install development dependencies
