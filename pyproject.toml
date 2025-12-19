@@ -4,17 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabernacleorm"
-version = "0.1.0"
-description = "A lightweight and intuitive Python ORM for database operations"
+version = "2.0.0"
+description = "A unified, multi-engine async ORM for Python (MongoDB, PostgreSQL, MySQL, SQLite)"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.8"
 authors = [
     {name = "Ganilson Garcia", email = "ganilsongarcia87@gmail.com"}
 ]
-keywords = ["orm", "database", "sql", "python", "tabernacle"]
+keywords = ["orm", "database", "async", "mongodb", "postgresql", "mysql", "sqlite", "fastapi"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
@@ -25,22 +25,26 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Database",
-    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: AsyncIO",
 ]
 
 dependencies = []
 
 [project.optional-dependencies]
-sqlite = []
-postgresql = ["psycopg2-binary>=2.9.0"]
-mysql = ["pymysql>=1.0.0"]
+postgresql = ["asyncpg>=0.27.0"]
+mysql = ["aiomysql>=0.1.1"]
+mongodb = ["motor>=3.1.0"]
+all = ["asyncpg>=0.27.0", "aiomysql>=0.1.1", "motor>=3.1.0"]
 dev = [
     "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
     "black>=23.0.0",
     "isort>=5.0.0",
     "mypy>=1.0.0",
 ]
+
+[project.scripts]
+tabernacle = "tabernacleorm.cli.main:main"
 
 [project.urls]
 Homepage = "https://github.com/ganilson/tabernacleorm"

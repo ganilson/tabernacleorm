@@ -1,9 +1,12 @@
 """
-TabernacleORM - A lightweight and intuitive Python ORM
+TabernacleORM - A universal Python ORM for MongoDB, PostgreSQL, MySQL, and SQLite.
+
+Inspired by Mongoose, designed for FastAPI and modern Python applications.
 """
 
-from .database import Database
-from .model import Model
+from .core.connection import connect, disconnect, get_connection
+from .core.config import Config
+from .models.model import Model, EmbeddedModel
 from .fields import (
     Field,
     IntegerField,
@@ -13,15 +16,29 @@ from .fields import (
     BooleanField,
     DateTimeField,
     DateField,
+    UUIDField,
+    JSONField,
+    ArrayField,
     ForeignKey,
+    OneToMany,
+    ManyToMany,
+    EmbeddedField,
 )
-from .query import QuerySet
+from .query.queryset import QuerySet
+from .models.hooks import hook
 
-__version__ = "0.1.0"
+__version__ = "2.0.0"
 __author__ = "Ganilson Garcia"
 __all__ = [
-    "Database",
+    # Connection
+    "connect",
+    "disconnect",
+    "get_connection",
+    "Config",
+    # Models
     "Model",
+    "EmbeddedModel",
+    # Fields
     "Field",
     "IntegerField",
     "StringField",
@@ -30,6 +47,15 @@ __all__ = [
     "BooleanField",
     "DateTimeField",
     "DateField",
+    "UUIDField",
+    "JSONField",
+    "ArrayField",
     "ForeignKey",
+    "OneToMany",
+    "ManyToMany",
+    "EmbeddedField",
+    # Query
     "QuerySet",
+    # Hooks
+    "hook",
 ]

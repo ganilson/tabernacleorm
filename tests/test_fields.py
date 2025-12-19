@@ -16,7 +16,6 @@ from tabernacleorm.fields import (
     ForeignKey,
 )
 
-
 class TestIntegerField:
     def test_validate_integer(self):
         field = IntegerField()
@@ -39,15 +38,11 @@ class TestIntegerField:
         with pytest.raises(ValueError):
             field.validate(None)
     
-    def test_sql_type(self):
-        field = IntegerField()
-        assert field.get_sql_type() == "INTEGER"
-    
-    def test_auto_increment_sql(self):
+    def test_field_attributes(self):
         field = IntegerField(primary_key=True, auto_increment=True)
-        field.name = "id"
-        assert "AUTOINCREMENT" in field.get_column_definition()
-
+        assert field.primary_key
+        assert field.auto_increment
+        assert field.get_schema()["type"] == "integer"
 
 class TestStringField:
     def test_validate_string(self):
@@ -60,11 +55,11 @@ class TestStringField:
         field.name = "test"
         with pytest.raises(ValueError):
             field.validate("hello world")
-    
-    def test_sql_type(self):
+            
+    def test_field_attributes(self):
         field = StringField(max_length=255)
-        assert field.get_sql_type() == "VARCHAR(255)"
-
+        assert field.max_length == 255
+        assert field.get_schema()["type"] == "string"
 
 class TestTextField:
     def test_validate_text(self):
@@ -72,11 +67,6 @@ class TestTextField:
         field.name = "test"
         long_text = "a" * 10000
         assert field.validate(long_text) == long_text
-    
-    def test_sql_type(self):
-        field = TextField()
-        assert field.get_sql_type() == "TEXT"
-
 
 class TestFloatField:
     def test_validate_float(self):
@@ -88,11 +78,6 @@ class TestFloatField:
         field = FloatField()
         field.name = "test"
         assert field.validate(42) == 42.0
-    
-    def test_sql_type(self):
-        field = FloatField()
-        assert field.get_sql_type() == "REAL"
-
 
 class TestBooleanField:
     def test_validate_true(self):
@@ -108,11 +93,6 @@ class TestBooleanField:
     def test_default_value(self):
         field = BooleanField(default=True)
         assert field.default is True
-    
-    def test_sql_type(self):
-        field = BooleanField()
-        assert field.get_sql_type() == "BOOLEAN"
-
 
 class TestDateTimeField:
     def test_validate_datetime(self):
@@ -127,11 +107,6 @@ class TestDateTimeField:
         dt_str = "2024-01-15T10:30:00"
         result = field.validate(dt_str)
         assert isinstance(result, datetime)
-    
-    def test_sql_type(self):
-        field = DateTimeField()
-        assert field.get_sql_type() == "DATETIME"
-
 
 class TestDateField:
     def test_validate_date(self):
@@ -146,25 +121,9 @@ class TestDateField:
         now = datetime.now()
         result = field.validate(now)
         assert isinstance(result, date)
-    
-    def test_sql_type(self):
-        field = DateField()
-        assert field.get_sql_type() == "DATE"
-
 
 class TestForeignKey:
     def test_validate_integer(self):
         field = ForeignKey(to="users")
         field.name = "user_id"
         assert field.validate(1) == 1
-    
-    def test_sql_type(self):
-        field = ForeignKey(to="users")
-        assert field.get_sql_type() == "INTEGER"
-    
-    def test_column_definition_includes_reference(self):
-        field = ForeignKey(to="users", on_delete="CASCADE")
-        field.name = "user_id"
-        definition = field.get_column_definition()
-        assert "REFERENCES users(id)" in definition
-        assert "ON DELETE CASCADE" in definition
