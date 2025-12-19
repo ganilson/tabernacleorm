@@ -1,230 +1,126 @@
 """
-Example usage of TabernacleORM.
+Example usage of TabernacleORM v2.0.
 
 Run this file to see TabernacleORM in action:
     python examples/basic_usage.py
-
-This example demonstrates the basic usage of TabernacleORM.
-
 """
 
+import asyncio
 from tabernacleorm import (
-    Database,
+    connect, 
+    disconnect,
     Model,
-    IntegerField,
-    StringField,
-    TextField,
-    FloatField,
-    BooleanField,
-    DateTimeField,
-    ForeignKey,
+    fields
 )
 
-
-# ============================================
-# 1. Initialize Database
-# ============================================
-
-print("=" * 50)
-print("TabernacleORM - Basic Usage Example")
-print("=" * 50)
-
-# Create an in-memory SQLite database (or use a file path like "my_app.db")
-db = Database(":memory:", echo=True)
-
-
-# ============================================
-# 2. Define Models
-# ============================================
-
+# 1. Define Models
 class Author(Model):
-    """Author model for blog posts."""
-    name = StringField(max_length=100, nullable=False)
-    email = StringField(max_length=255, unique=True)
-    bio = TextField(nullable=True)
-    active = BooleanField(default=True)
-    created_at = DateTimeField(auto_now_add=True)
-
+    name = fields.StringField(required=True)
+    email = fields.StringField(unique=True)
+    bio = fields.TextField()
 
 class Post(Model):
-    """Blog post model."""
-    title = StringField(max_length=200, nullable=False)
-    content = TextField(nullable=False)
-    author_id = ForeignKey(to="authors", on_delete="CASCADE")
-    views = IntegerField(default=0)
-    rating = FloatField(nullable=True)
-    published = BooleanField(default=False)
-    created_at = DateTimeField(auto_now_add=True)
-    updated_at = DateTimeField(auto_now=True)
+    title = fields.StringField(required=True)
+    content = fields.TextField()
+    author_id = fields.ForeignKey(Author)
+    views = fields.IntegerField(default=0)
+    published = fields.BooleanField(default=False)
 
+async def main():
+    print("=" * 50)
+    print("TabernacleORM v2.0 - Basic Usage")
+    print("=" * 50)
 
-# ============================================
-# 3. Connect Models to Database
-# ============================================
+    # 2. Connect to Database (using SQLite in-memory for this example)
+    print("\nConnecting to database...")
+    db = connect("sqlite:///:memory:")
+    await db.connect()
+    
+    # Create Tables (Manual creation for this simple script, usually handled by migrations)
+    print("Creating tables...")
+    await db.get_write_engine().executeRaw("""
+        CREATE TABLE authors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name VARCHAR(255) NOT NULL,
+            email VARCHAR(255) UNIQUE,
+            bio TEXT
+        );
+    """)
+    await db.get_write_engine().executeRaw("""
+        CREATE TABLE posts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title VARCHAR(255) NOT NULL,
+            content TEXT,
+            author_id INTEGER REFERENCES authors(id),
+            views INTEGER DEFAULT 0,
+            published BOOLEAN DEFAULT 0
+        );
+    """)
+    
+    # 3. Create Records
+    print("\nCreating authors...")
+    author1 = await Author.create(
+        name="Ganilson Garcia",
+        email="ganilson@example.com",
+        bio="Creator of TabernacleORM"
+    )
+    print(f"Created: {author1.name} (ID: {author1.id})")
 
-Author.set_database(db)
-Post.set_database(db)
+    author2 = await Author.create(
+        name="Jane Doe",
+        email="jane@example.com",
+        bio="Tech Writer"
+    )
+    print(f"Created: {author2.name} (ID: {author2.id})")
 
-# Create tables
-db.create_tables()
+    print("\nCreating posts...")
+    post1 = await Post.create(
+        title="Welcome to TabernacleORM",
+        content="This is a unified async ORM.",
+        author_id=author1.id,
+        published=True,
+        views=100
+    )
+    print(f"Created: {post1.title}")
 
+    post2 = await Post.create(
+        title="Async Python is Great",
+        content="Non-blocking I/O rules!",
+        author_id=author2.id,
+        published=True,
+        views=50
+    )
+    
+    # 4. Query Records
+    print("\nQuerying records...")
+    
+    # Find all published posts
+    print("\nPublished Posts:")
+    posts = await Post.find({"published": True}).exec()
+    for p in posts:
+        print(f"- {p.title} (Views: {p.views})")
 
-# ============================================
-# 4. Create Records
-# ============================================
+    # Filter with operators (Mongoose style)
+    print("\nPosts with > 60 views:")
+    popular = await Post.find({"views": {"$gt": 60}}).exec()
+    for p in popular:
+        print(f"- {p.title}")
 
-print("\n" + "=" * 50)
-print("Creating records...")
-print("=" * 50)
+    # 5. Update Records
+    print("\nUpdating record...")
+    post1.views += 10
+    await post1.save()
+    print(f"Updated views for '{post1.title}': {post1.views}")
 
-# Create authors
-author1 = Author.create(
-    name="John Doe",
-    email="john@example.com",
-    bio="Python developer and writer"
-)
-print(f"Created: {author1}")
+    # 6. Delete Records
+    print("\nDeleting record...")
+    await post2.delete()
+    count = await Post.find().count()
+    print(f"Remaining posts count: {count}")
 
-author2 = Author.create(
-    name="Jane Smith",
-    email="jane@example.com",
-    bio="Data scientist and blogger"
-)
-print(f"Created: {author2}")
+    # Cleanup
+    await disconnect()
+    print("\n✅ Done!")
 
-# Create posts
-post1 = Post.create(
-    title="Getting Started with Python",
-    content="Python is a versatile programming language...",
-    author_id=author1.id,
-    published=True,
-    rating=4.5
-)
-print(f"Created: {post1}")
-
-post2 = Post.create(
-    title="Advanced ORM Techniques",
-    content="Learn how to use ORMs effectively...",
-    author_id=author1.id,
-    views=100,
-    published=True
-)
-
-post3 = Post.create(
-    title="Data Science Introduction",
-    content="Data science combines statistics and programming...",
-    author_id=author2.id,
-    published=False
-)
-
-
-# ============================================
-# 5. Query Records
-# ============================================
-
-print("\n" + "=" * 50)
-print("Querying records...")
-print("=" * 50)
-
-# Get all authors
-print("\nAll authors:")
-for author in Author.all():
-    print(f"  - {author.name} ({author.email})")
-
-# Filter posts
-print("\nPublished posts:")
-published = Post.filter(published=True)
-for post in published:
-    print(f"  - {post.title} (views: {post.views})")
-
-# Get single record
-john = Author.get(name="John Doe")
-print(f"\nFound author: {john.name}")
-
-# Advanced filtering
-print("\nPosts with views > 50:")
-popular = Post.filter(views__gt=50)
-for post in popular:
-    print(f"  - {post.title}")
-
-# Ordering
-print("\nPosts ordered by title (descending):")
-ordered = Post.all().order_by("-title")
-for post in ordered:
-    print(f"  - {post.title}")
-
-# Count
-total_posts = Post.all().count()
-print(f"\nTotal posts: {total_posts}")
-
-
-# ============================================
-# 6. Update Records
-# ============================================
-
-print("\n" + "=" * 50)
-print("Updating records...")
-print("=" * 50)
-
-# Update single record
-post1.views += 50
-post1.save()
-print(f"Updated {post1.title} views to {post1.views}")
-
-# Get and verify
-updated_post = Post.get_by_id(post1.id)
-print(f"Verified views: {updated_post.views}")
-
-
-# ============================================
-# 7. Delete Records
-# ============================================
-
-print("\n" + "=" * 50)
-print("Deleting records...")
-print("=" * 50)
-
-# Delete unpublished posts
-unpublished = Post.filter(published=False)
-for post in unpublished:
-    print(f"Deleting: {post.title}")
-    post.delete()
-
-# Verify
-remaining = Post.all().count()
-print(f"Remaining posts: {remaining}")
-
-
-# ============================================
-# 8. Chained Queries
-# ============================================
-
-print("\n" + "=" * 50)
-print("Chained queries...")
-print("=" * 50)
-
-# Complex query
-results = (
-    Post.filter(published=True)
-    .filter(views__gte=0)
-    .order_by("-views")
-    .limit(5)
-)
-
-print("Top published posts by views:")
-for post in results:
-    print(f"  - {post.title}: {post.views} views")
-
-
-# ============================================
-# 9. Cleanup
-# ============================================
-
-print("\n" + "=" * 50)
-print("Cleanup...")
-print("=" * 50)
-
-db.disconnect()
-print("Database connection closed.")
-
-print("\n✅ Example completed successfully!")
+if __name__ == "__main__":
+    asyncio.run(main())

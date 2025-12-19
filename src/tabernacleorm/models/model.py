@@ -35,6 +35,12 @@ class Model(HookMixin, metaclass=ModelMeta):
                 # Store in __dict__ so descriptors can find it
                 default = field.get_default()
                 self.__dict__[name] = default
+        
+        # Handle implicit Primary Key if provided (e.g. from DB for implicit 'id')
+        # If 'id' is not in _fields, the loop above missed it.
+        pk = self._primary_key
+        if pk not in self._fields and pk in kwargs:
+            setattr(self, pk, kwargs[pk])
     
     def __repr__(self) -> str:
         try:
@@ -116,6 +122,11 @@ class Model(HookMixin, metaclass=ModelMeta):
     async def findById(cls, id: Any) -> Optional["Model"]:
         """Find a document by ID."""
         return await cls.find({"id": id}).first()
+    
+    @classmethod
+    async def findMany(cls, query: Optional[Dict[str, Any]] = None) -> List["Model"]:
+        """Find multiple documents."""
+        return await cls.find(query).exec()
     
     @classmethod
     async def create(cls, **kwargs) -> "Model":
@@ -262,15 +273,53 @@ class Model(HookMixin, metaclass=ModelMeta):
         return await db.aggregate(cls.__collection__, pipeline)
     
     @classmethod
+    async def createTable(cls) -> None:
+        """Create the table/collection for this model."""
+        schema = {}
+        for name, field in cls._fields.items():
+            field_type = "string"
+            cls_name = field.__class__.__name__
+            
+            if "Integer" in cls_name or "ForeignKey" in cls_name:
+                field_type = "integer"
+            elif "Boolean" in cls_name:
+                field_type = "boolean"
+            elif "Float" in cls_name:
+                field_type = "float"
+            elif "Date" in cls_name:
+                if "Time" in cls_name:
+                    field_type = "datetime"
+                else:
+                    field_type = "date"
+            elif "JSON" in cls_name:
+                field_type = "json"
+            elif "Array" in cls_name:
+                field_type = "array"
+            
+            spec = {
+                "type": field_type,
+                "primary_key": field.primary_key,
+                "unique": field.unique,
+                "default": field.default,
+            }
+            if not field.nullable:
+                spec["required"] = True
+            
+            if hasattr(field, "auto_increment") and field.auto_increment:
+                spec["auto_increment"] = True
+                
+            schema[name] = spec
+            
+        db = cls._get_db()
+        await db.createCollection(cls.__collection__, schema)
+
+    @classmethod
     def _get_db(cls):
         """Get database connection."""
         conn = get_connection()
         if not conn or not conn.is_connected:
             raise RuntimeError("Database not connected")
         
-        # Determine engine
-        # If model has specific engine defined, use that?
-        # For now use the connection's default logic
         return conn.engine
 
 

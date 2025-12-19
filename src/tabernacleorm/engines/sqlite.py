@@ -94,6 +94,15 @@ class SQLiteEngine(BaseEngine):
                     if not self._in_transaction:
                         self._connection.commit()
                     return []
+            except sqlite3.OperationalError as e:
+                msg = str(e)
+                if "no such table" in msg:
+                    table = msg.split(":")[-1].strip() if ":" in msg else "unknown"
+                    raise RuntimeError(
+                        f"Table not found (Error: {e}). "
+                        f"Did you forget to run 'tabernacle makemigrations' and 'tabernacle migrate'?"
+                    )
+                raise e
             finally:
                 cursor.close()
         

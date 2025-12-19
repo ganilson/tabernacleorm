@@ -1,174 +1,128 @@
-# TabernacleORM 🏛️
+# TabernacleORM
 
-A lightweight, intuitive, and Pythonic ORM for database operations.
+TabernacleORM is a unified, asynchronous Object-Relational Mapper (ORM) for Python. It provides a single, consistent API to interact with MongoDB, PostgreSQL, MySQL, and SQLite.
 
-## ✨ Features
+Its design is heavily inspired by Mongoose (from the Node.js ecosystem), making it intuitive for developers familiar with JavaScript or those who prefer a fluent, document-oriented interface even when working with SQL databases.
 
-- **Simple Model Definition** - Define models using Python classes with typed fields
-- **Intuitive Query API** - Chain methods like `filter()`, `order_by()`, `limit()`
-- **Auto Migrations** - Built-in migration system for schema versioning
-- **SQLite Support** - Works out of the box with SQLite (more databases coming soon)
-- **Type Hints** - Full type annotation support for better IDE experience
+## Why TabernacleORM?
 
-## 📦 Installation
+### The Problem
+In the Python ecosystem, you typically choose an ORM based on your database:
+- **SQLAlchemy/Tortoise ORM**: Great for SQL, but switching to NoSQL (MongoDB) involves rewriting everything using ODMantic or Motor.
+- **MongoEngine/ODMantic**: Great for MongoDB, but no SQL support.
+- **Django ORM**: Synchronous by default, deeply coupled to the framework.
+
+### The Tabernacle Solution
+TabernacleORM decouples your application logic from the underlying database engine. You write the same code whether you are storing data in PostgreSQL today or migrating to MongoDB tomorrow.
+
+**Key Differentiators:**
+1.  **Unified API**: Use `find()`, `create()`, `save()` regardless of the backend.
+2.  **Async First**: Built on top of `asyncio` for high-performance, non-blocking applications.
+3.  **Low Boilerplate**: Define models with simple Python classes. No complex session management or data mappers required for basic tasks.
+
+## Mongoose-Like Experience
+
+If you have used Mongoose in Node.js, TabernacleORM feels right at home.
+
+| Mongoose (Node.js) | TabernacleORM (Python) |
+|--------------------|------------------------|
+| `const user = await User.create({ name: 'John' });` | `user = await User.create(name="John")` |
+| `const user = await User.findOne({ email: '...' });` | `user = await User.findOne({"email": "..."})` |
+| `const users = await User.find({ age: { $gt: 18 } });` | `users = await User.find({"age": {"$gt": 18}}).exec()` |
+| `user.name = 'Jane'; await user.save();` | `user.name = "Jane"; await user.save()` |
+
+## Supported Engines
+
+TabernacleORM supports the following engines through a plugin interface:
+
+1.  **MongoDB** (via `motor`): Native JSON support, embedded documents, and replica sets.
+2.  **PostgreSQL** (via `asyncpg`): High-performance SQL, robust transaction support.
+3.  **MySQL** (via `aiomysql`): Standard MySQL support with connection pooling.
+4.  **SQLite** (via `aiosqlite`): Zero-configuration file-based database for development and embedded apps.
+
+Connection strings are auto-detected:
+- `mongodb://localhost:27017/db`
+- `postgresql://user:pass@localhost/db`
+- `mysql://user:pass@localhost/db`
+- `sqlite:///my_db.sqlite`
+
+## Installation
 
 ```bash
 pip install tabernacleorm
+
+# Install with specific drivers
+pip install tabernacleorm[mongodb]
+pip install tabernacleorm[postgresql]
+pip install tabernacleorm[mysql]
+pip install tabernacleorm[all]
 ```
 
-Or install from source:
+## Supported Python Versions
 
-```bash
-pip install -e .
-```
+- Python 3.8
+- Python 3.9
+- Python 3.10
+- Python 3.11
+- Python 3.12+
 
-## 🚀 Quick Start
+## Usage Scenarios
 
-### 1. Define Your Models
+### 1. High-Performance APIs (FastAPI)
+TabernacleORM is ideal for FastAPI due to its async nature.
 
 ```python
-from tabernacleorm import Model, Database, StringField, IntegerField, DateTimeField
+from fastapi import FastAPI
+from tabernacleorm import connect, disconnect
+from my_app.models import User
 
-# Initialize database
-db = Database("my_app.db", echo=True)
+app = FastAPI()
 
-# Define your model
-class User(Model):
-    name = StringField(max_length=100, nullable=False)
-    email = StringField(max_length=255, unique=True)
-    age = IntegerField(nullable=True)
-    created_at = DateTimeField(auto_now_add=True)
+@app.on_event("startup")
+async def startup():
+    await connect("postgresql://user:pass@localhost/db").connect()
 
-# Connect model to database
-User.set_database(db)
+@app.on_event("shutdown")
+async def shutdown():
+    await disconnect()
 
-# Create the table
-db.create_table(User)
+@app.post("/users")
+async def create_user(data: dict):
+    user = await User.create(**data)
+    return {"id": user.id}
 ```
 
-### 2. Create Records
+### 2. Desktop Applications (Tkinter)
+You can use TabernacleORM in desktop apps to handle local data (SQLite) or cloud data (MongoDB/Postgres).
+*Note: Since Tkinter is synchronous, run async ORM calls in a separate thread or use a loop integration library like `async_tkinter_loop`.*
+
+### 3. AI and Data Scripts
+For simple scripts, implementing an entire SQLAlchemy repository pattern is overkill. TabernacleORM allows quick data persistence.
 
 ```python
-# Method 1: Create and save
-user = User(name="John Doe", email="john@example.com", age=30)
-user.save()
+import asyncio
+from tabernacleorm import connect
+from models import TrainingLog
 
-# Method 2: Create directly
-user = User.create(name="Jane Doe", email="jane@example.com", age=25)
+async def log_training_metrics(epoch, loss):
+    db = connect("sqlite:///training.db")
+    await db.connect()
+    await TrainingLog.create(epoch=epoch, loss=loss)
+    await db.disconnect()
 ```
 
-### 3. Query Records
+## Future Roadmap
 
-```python
-# Get all users
-users = User.all()
+We are constantly working to make TabernacleORM more interesting and powerful:
 
-# Filter users
-young_users = User.filter(age__lt=30)
-john = User.get(name="John Doe")
+-   **Auto-Migrations**: Dynamic schema diffing that automatically generates migration files (similar to Django/Alembic).
+-   **GraphQL Integration**: Auto-generate GraphQL schemas from your Models.
+-   **Rust Core**: Rewriting the serialization/deserialization layer in Rust for extreme performance.
+-   **GUI Admin Panel**: A built-in admin interface to manage your data visually.
 
-# Chain queries
-users = User.filter(age__gte=18).order_by("-created_at").limit(10)
+## Author & Sponsorship
 
-# Advanced filtering
-admins = User.filter(email__contains="@admin.com")
-recent = User.filter(created_at__gte=yesterday)
-```
+**Author:** Ganilson Garcia
+**Sponsored by:** Synctech
 
-### 4. Update Records
-
-```python
-user = User.get(id=1)
-user.name = "John Smith"
-user.save()
-
-# Or bulk update
-User.filter(age__lt=18).update(status="minor")
-```
-
-### 5. Delete Records
-
-```python
-user = User.get(id=1)
-user.delete()
-
-# Or bulk delete
-User.filter(active=False).delete()
-```
-
-## 📋 Field Types
-
-| Field Type | SQL Type | Python Type |
-|------------|----------|-------------|
-| `IntegerField` | INTEGER | `int` |
-| `StringField` | VARCHAR | `str` |
-| `TextField` | TEXT | `str` |
-| `FloatField` | REAL | `float` |
-| `BooleanField` | BOOLEAN | `bool` |
-| `DateTimeField` | DATETIME | `datetime` |
-| `DateField` | DATE | `date` |
-| `ForeignKey` | INTEGER | `int` |
-
-## 🔍 Query Operators
-
-| Operator | Description | Example |
-|----------|-------------|---------|
-| `__gt` | Greater than | `age__gt=18` |
-| `__gte` | Greater or equal | `age__gte=18` |
-| `__lt` | Less than | `age__lt=65` |
-| `__lte` | Less or equal | `age__lte=65` |
-| `__ne` | Not equal | `status__ne="inactive"` |
-| `__in` | In list | `id__in=[1, 2, 3]` |
-| `__contains` | Contains substring | `name__contains="John"` |
-| `__startswith` | Starts with | `email__startswith="admin"` |
-| `__endswith` | Ends with | `email__endswith=".com"` |
-| `__isnull` | Is null check | `deleted_at__isnull=True` |
-
-## 🔄 Migrations
-
-```python
-from tabernacleorm import Database
-from tabernacleorm.migrations import Migration, MigrationManager, Schema
-
-db = Database("my_app.db")
-manager = MigrationManager(db)
-
-class AddStatusColumn(Migration):
-    version = "001"
-    description = "Add status column to users table"
-    
-    def up(self, db):
-        db.execute(Schema.add_column("users", "status", "VARCHAR(50) DEFAULT 'active'"))
-    
-    def down(self, db):
-        # SQLite doesn't support DROP COLUMN easily
-        pass
-
-manager.register(AddStatusColumn())
-manager.migrate()
-```
-
-## 🛠️ Development
-
-```bash
-# Clone the repository
-git clone https://github.com/ganilson/tabernacleorm.git
-cd tabernacleorm
-
-# Install development dependencies
-pip install -e ".[dev]"
-
-# Run tests
-pytest
-
-# Format code
-black src tests
-isort src tests
-```
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-
-### AUTHOR: Ganilson Garcia - ANGOLA, HUILA, LUBANGO 
+(Logos included in documentation package)

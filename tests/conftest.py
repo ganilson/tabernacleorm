@@ -3,14 +3,10 @@ import asyncio
 import pytest
 from typing import Generator
 
-@pytest.fixture(scope="session")
-def event_loop() -> Generator:
-    """Create an instance of the default event loop for each test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
+# event_loop fixture removed to use pytest-asyncio default
 
-@pytest.fixture(scope="function")
+
+@pytest.fixture
 async def db():
     """Setup and teardown database connection."""
     from tabernacleorm import connect, disconnect

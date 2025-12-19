@@ -7,8 +7,10 @@ import asyncio
 import sys
 
 from . import commands
+from .visuals import print_logo, Colors
 
 def main():
+    print_logo()
     parser = argparse.ArgumentParser(description="TabernacleORM CLI")
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
     

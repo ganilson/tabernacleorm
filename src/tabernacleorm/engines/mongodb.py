@@ -70,6 +70,7 @@ class MongoDBEngine(BaseEngine):
             self._db = None
             self._connected = False
     
+
     async def insertOne(
         self,
         collection: str,
@@ -83,7 +84,7 @@ class MongoDBEngine(BaseEngine):
         result = await self._db[collection].insert_one(document)
         return str(result.inserted_id)
     
-    async def insert_many(
+    async def insertMany(
         self,
         collection: str,
         documents: List[Dict[str, Any]],
@@ -100,7 +101,7 @@ class MongoDBEngine(BaseEngine):
         result = await self._db[collection].insert_many(documents, ordered=False)
         return [str(id) for id in result.inserted_ids]
     
-    async def find_one(
+    async def findOne(
         self,
         collection: str,
         query: Dict[str, Any],
@@ -113,7 +114,7 @@ class MongoDBEngine(BaseEngine):
         doc = await self._db[collection].find_one(query, projection=proj)
         return self._normalize_document(doc) if doc else None
     
-    async def find_many(
+    async def findMany(
         self,
         collection: str,
         query: Dict[str, Any],
@@ -138,7 +139,7 @@ class MongoDBEngine(BaseEngine):
         docs = await cursor.to_list(length=limit if limit > 0 else None)
         return [self._normalize_document(doc) for doc in docs]
     
-    async def update_one(
+    async def updateOne(
         self,
         collection: str,
         query: Dict[str, Any],
@@ -155,7 +156,7 @@ class MongoDBEngine(BaseEngine):
         result = await self._db[collection].update_one(query, update, upsert=upsert)
         return result.modified_count
     
-    async def update_many(
+    async def updateMany(
         self,
         collection: str,
         query: Dict[str, Any],
@@ -170,13 +171,13 @@ class MongoDBEngine(BaseEngine):
         result = await self._db[collection].update_many(query, update)
         return result.modified_count
     
-    async def delete_one(self, collection: str, query: Dict[str, Any]) -> int:
+    async def deleteOne(self, collection: str, query: Dict[str, Any]) -> int:
         """Delete a single document."""
         query = self._normalize_query(query)
         result = await self._db[collection].delete_one(query)
         return result.deleted_count
     
-    async def delete_many(self, collection: str, query: Dict[str, Any]) -> int:
+    async def deleteMany(self, collection: str, query: Dict[str, Any]) -> int:
         """Delete multiple documents."""
         query = self._normalize_query(query)
         result = await self._db[collection].delete_many(query)
@@ -215,7 +216,7 @@ class MongoDBEngine(BaseEngine):
         docs = await cursor.to_list(length=None)
         return [self._normalize_document(doc) for doc in docs]
     
-    async def create_collection(
+    async def createCollection(
         self,
         name: str,
         schema: Optional[Dict[str, Any]] = None
@@ -230,20 +231,20 @@ class MongoDBEngine(BaseEngine):
         if schema:
             for field_name, field_spec in schema.items():
                 if field_spec.get("unique"):
-                    await self.create_index(name, [field_name], unique=True)
+                    await self.createIndex(name, [field_name], unique=True)
                 elif field_spec.get("index"):
-                    await self.create_index(name, [field_name])
+                    await self.createIndex(name, [field_name])
     
-    async def drop_collection(self, name: str) -> None:
+    async def dropCollection(self, name: str) -> None:
         """Drop a collection."""
         await self._db[name].drop()
     
-    async def collection_exists(self, name: str) -> bool:
+    async def collectionExists(self, name: str) -> bool:
         """Check if collection exists."""
         collections = await self._db.list_collection_names()
         return name in collections
     
-    async def create_index(
+    async def createIndex(
         self,
         collection: str,
         fields: List[str],
@@ -263,30 +264,30 @@ class MongoDBEngine(BaseEngine):
         )
         return index_name
     
-    async def drop_index(self, collection: str, name: str) -> None:
+    async def dropIndex(self, collection: str, name: str) -> None:
         """Drop an index."""
         await self._db[collection].drop_index(name)
     
-    async def _begin_transaction(self) -> None:
+    async def _beginTransaction(self) -> None:
         """Begin a transaction."""
         self._session = await self._client.start_session()
         self._session.start_transaction()
     
-    async def _commit_transaction(self) -> None:
+    async def _commitTransaction(self) -> None:
         """Commit the current transaction."""
         if self._session:
             await self._session.commit_transaction()
             await self._session.end_session()
             self._session = None
     
-    async def _rollback_transaction(self) -> None:
+    async def _rollbackTransaction(self) -> None:
         """Rollback the current transaction."""
         if self._session:
             await self._session.abort_transaction()
             await self._session.end_session()
             self._session = None
     
-    async def execute_raw(
+    async def executeRaw(
         self,
         query: str,
         params: Optional[Tuple] = None
@@ -372,10 +373,10 @@ class MongoDBEngine(BaseEngine):
         
         return value
     
-    def normalize_id(self, id_value: Any) -> Any:
+    def normalizeId(self, id_value: Any) -> Any:
         """Normalize ID to MongoDB ObjectId."""
         return self._to_object_id(id_value)
     
-    def denormalize_id(self, id_value: Any) -> str:
+    def denormalizeId(self, id_value: Any) -> str:
         """Convert MongoDB ObjectId to string."""
         return str(id_value) if id_value else None

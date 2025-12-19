@@ -97,6 +97,7 @@ class MySQLEngine(BaseEngine):
                         await conn.commit()
                     return []
     
+
     async def insertOne(self, collection: str, document: Dict[str, Any]) -> Any:
         keys = []
         values = []
@@ -115,7 +116,7 @@ class MySQLEngine(BaseEngine):
                 await conn.commit()
                 return cursor.lastrowid
     
-    async def insert_many(
+    async def insertMany(
         self,
         collection: str,
         documents: List[Dict[str, Any]],
@@ -130,22 +131,22 @@ class MySQLEngine(BaseEngine):
         for i in range(0, len(documents), batch_size):
             batch = documents[i:i + batch_size]
             for doc in batch:
-                doc_id = await self.insert_one(collection, doc)
+                doc_id = await self.insertOne(collection, doc)
                 ids.append(doc_id)
         
         return ids
     
-    async def find_one(
+    async def findOne(
         self,
         collection: str,
         query: Dict[str, Any],
         projection: Optional[List[str]] = None
     ) -> Optional[Dict[str, Any]]:
         """Find a single document."""
-        results = await self.find_many(collection, query, projection=projection, limit=1)
+        results = await self.findMany(collection, query, projection=projection, limit=1)
         return results[0] if results else None
     
-    async def find_many(
+    async def findMany(
         self,
         collection: str,
         query: Dict[str, Any],
@@ -185,7 +186,7 @@ class MySQLEngine(BaseEngine):
                 rows = await cursor.fetchall()
                 return [self._deserialize_row(dict(row)) for row in rows]
     
-    async def update_one(
+    async def updateOne(
         self,
         collection: str,
         query: Dict[str, Any],
@@ -195,10 +196,10 @@ class MySQLEngine(BaseEngine):
         """Update a single document."""
         update_data = update.get("$set", update)
         
-        doc = await self.find_one(collection, query, projection=["id"])
+        doc = await self.findOne(collection, query, projection=["id"])
         
         if not doc and upsert:
-            await self.insert_one(collection, {**query, **update_data})
+            await self.insertOne(collection, {**query, **update_data})
             return 1
         elif not doc:
             return 0
@@ -219,7 +220,7 @@ class MySQLEngine(BaseEngine):
                 await conn.commit()
                 return cursor.rowcount
     
-    async def update_many(
+    async def updateMany(
         self,
         collection: str,
         query: Dict[str, Any],
@@ -249,9 +250,9 @@ class MySQLEngine(BaseEngine):
                 await conn.commit()
                 return cursor.rowcount
     
-    async def delete_one(self, collection: str, query: Dict[str, Any]) -> int:
+    async def deleteOne(self, collection: str, query: Dict[str, Any]) -> int:
         """Delete a single document."""
-        doc = await self.find_one(collection, query, projection=["id"])
+        doc = await self.findOne(collection, query, projection=["id"])
         if not doc:
             return 0
         
@@ -263,7 +264,7 @@ class MySQLEngine(BaseEngine):
                 await conn.commit()
                 return cursor.rowcount
     
-    async def delete_many(self, collection: str, query: Dict[str, Any]) -> int:
+    async def deleteMany(self, collection: str, query: Dict[str, Any]) -> int:
         """Delete multiple documents."""
         sql = f"DELETE FROM `{collection}`"
         params = []
@@ -354,7 +355,7 @@ class MySQLEngine(BaseEngine):
         sql = " ".join(sql_parts)
         return await self._execute(sql, tuple(params) if params else None)
     
-    async def create_collection(
+    async def createCollection(
         self,
         name: str,
         schema: Optional[Dict[str, Any]] = None
@@ -368,17 +369,17 @@ class MySQLEngine(BaseEngine):
         
         await self._execute(sql, fetch=False)
     
-    async def drop_collection(self, name: str) -> None:
+    async def dropCollection(self, name: str) -> None:
         """Drop a table."""
         await self._execute(f"DROP TABLE IF EXISTS `{name}`", fetch=False)
     
-    async def collection_exists(self, name: str) -> bool:
+    async def collectionExists(self, name: str) -> bool:
         """Check if table exists."""
         sql = "SHOW TABLES LIKE %s"
         result = await self._execute(sql, (name,))
         return len(result) > 0
     
-    async def create_index(
+    async def createIndex(
         self,
         collection: str,
         fields: List[str],
@@ -400,30 +401,30 @@ class MySQLEngine(BaseEngine):
         
         return name
     
-    async def drop_index(self, collection: str, name: str) -> None:
+    async def dropIndex(self, collection: str, name: str) -> None:
         """Drop an index."""
         await self._execute(f"DROP INDEX `{name}` ON `{collection}`", fetch=False)
     
-    async def _begin_transaction(self) -> None:
+    async def _beginTransaction(self) -> None:
         """Begin a transaction."""
         self._transaction_conn = await self._pool.acquire()
         await self._transaction_conn.begin()
     
-    async def _commit_transaction(self) -> None:
+    async def _commitTransaction(self) -> None:
         """Commit the current transaction."""
         if self._transaction_conn:
             await self._transaction_conn.commit()
             self._pool.release(self._transaction_conn)
             self._transaction_conn = None
     
-    async def _rollback_transaction(self) -> None:
+    async def _rollbackTransaction(self) -> None:
         """Rollback the current transaction."""
         if self._transaction_conn:
             await self._transaction_conn.rollback()
             self._pool.release(self._transaction_conn)
             self._transaction_conn = None
     
-    async def execute_raw(
+    async def executeRaw(
         self,
         query: str,
         params: Optional[Tuple] = None

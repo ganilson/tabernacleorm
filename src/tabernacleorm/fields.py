@@ -16,7 +16,11 @@ class Field:
         default: Any = None,
         unique: bool = False,
         index: bool = False,
+        **kwargs
     ):
+        if kwargs.get("required"):
+            nullable = False
+
         self.primary_key = primary_key
         self.nullable = nullable
         self.default = default
