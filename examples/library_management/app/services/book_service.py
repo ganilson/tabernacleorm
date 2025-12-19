@@ -1,6 +1,6 @@
 """
 Book Service - Business logic for book operations
-Demonstrates: populate, complex queries, groupBy
+Demonstrates: populate, complex queries, filtering
 """
 
 from typing import List, Optional, Dict
@@ -12,84 +12,89 @@ class BookService:
     """Service for book operations"""
     
     @staticmethod
-    async def get_all_books(
-        category_id: Optional[str] = None,
-        author_id: Optional[str] = None,
-        available_only: bool = False,
-        search: Optional[str] = None,
-        skip: int = 0,
-        limit: int = 20
-    ) -> List[Book]:
-        """
-        Get all books with filters and populate
-        Demonstrates: populate, complex filtering
-        """
-        query = {}
-        
-        if category_id:
-            query["category_id"] = category_id
-        
-        if author_id:
-            query["author_id"] = author_id
-        
-        if available_only:
-            query["copies_available"] = {"$gt": 0}
-        
-        # Build query
-        qs = Book.find(query).skip(skip).limit(limit).sort("-created_at")
-        
-        # Populate author and category
-        books = await qs.populate("author_id").populate("category_id").exec()
-        
-        # Filter by search if provided
-        if search:
-            search_lower = search.lower()
-            books = [
-                b for b in books
-                if search_lower in b.title.lower() or
-                   search_lower in (b.description or "").lower()
-            ]
-        
+    async def get_all_books(skip: int = 0, limit: int = 20) -> List[Book]:
+        """Get all books with author and category populated"""
+        books = await Book.find().populate("author_id").populate("category_id").skip(skip).limit(limit).sort("-created_at").exec()
         return books
     
     @staticmethod
-    async def get_book_by_id(book_id: str) -> Optional[Book]:
-        """
-        Get book by ID with populated relationships
-        Demonstrates: populate
-        """
-        book = await Book.findById(book_id)
-        if not book:
-            return None
-        
-        # Populate relationships
-        author = await Author.findById(book.author_id)
-        category = await Category.findById(book.category_id)
-        
-        book.author_id = author
-        book.category_id = category
-        
+    async def get_book(book_id: str) -> Optional[Book]:
+        """Get book by ID with populated relationships"""
+        book = await Book.findOne({"_id": book_id}).populate("author_id").populate("category_id").exec()
         return book
     
     @staticmethod
-    async def create_book(book_data: dict) -> Book:
+    async def get_available_books(skip: int = 0, limit: int = 20) -> List[Book]:
+        """Get only available books"""
+        books = await Book.find().where("available_copies").gt(0).populate("author_id").populate("category_id").skip(skip).limit(limit).exec()
+        return books
+    
+    @staticmethod
+    async def create_book(
+        title: str,
+        isbn: str,
+        author_id: str,
+        category_id: Optional[str] = None,
+        description: Optional[str] = None,
+        available_copies: int = 1,
+        total_copies: int = 1
+    ) -> Book:
         """Create a new book"""
-        return await Book.create(**book_data)
+        # Check if ISBN already exists
+        existing = await Book.findOne({"isbn": isbn})
+        if existing:
+            raise ValueError("ISBN already exists")
+        
+        book = await Book.create(
+            title=title,
+            isbn=isbn,
+            author_id=author_id,
+            category_id=category_id,
+            description=description,
+            available_copies=available_copies,
+            total_copies=total_copies
+        )
+        return book
     
     @staticmethod
     async def update_book(book_id: str, book_data: dict) -> Optional[Book]:
         """Update book"""
-        return await Book.findByIdAndUpdate(
-            book_id,
+        book_data["updated_at"] = datetime.utcnow()
+        updated = await Book.findOneAndUpdate(
+            {"_id": book_id},
             {"$set": book_data},
             new=True
         )
+        return updated
     
     @staticmethod
     async def delete_book(book_id: str) -> bool:
         """Delete book"""
-        deleted = await Book.findByIdAndDelete(book_id)
+        deleted = await Book.findOneAndDelete({"_id": book_id})
         return deleted is not None
+    
+    @staticmethod
+    async def get_books_by_category(category_id: str, skip: int = 0, limit: int = 20) -> List[Book]:
+        """Get books by category"""
+        books = await Book.find({"category_id": category_id}).populate("author_id").skip(skip).limit(limit).exec()
+        return books
+    
+    @staticmethod
+    async def get_books_by_author(author_id: str, skip: int = 0, limit: int = 20) -> List[Book]:
+        """Get books by author"""
+        books = await Book.find({"author_id": author_id}).populate("category_id").skip(skip).limit(limit).exec()
+        return books
+    
+    @staticmethod
+    async def search_books(search_term: str, skip: int = 0, limit: int = 20) -> List[Book]:
+        """Search books by title or description"""
+        books = await Book.find({
+            "$or": [
+                {"title": {"$regex": search_term, "$options": "i"}},
+                {"description": {"$regex": search_term, "$options": "i"}}
+            ]
+        }).populate("author_id").populate("category_id").skip(skip).limit(limit).exec()
+        return books
     
     @staticmethod
     async def get_books_by_category() -> Dict[str, List[dict]]:

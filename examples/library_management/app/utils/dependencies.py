@@ -2,16 +2,21 @@
 FastAPI dependencies
 """
 
+from typing import TYPE_CHECKING, Optional
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthCredentials
+from fastapi.security import HTTPBearer
 from utils.security import decode_access_token
-from models import User
+
+if TYPE_CHECKING:
+    from models import User
 
 security = HTTPBearer()
 
 
-async def get_current_user(credentials: HTTPAuthCredentials = Depends(security)) -> User:
+async def get_current_user(credentials = Depends(security)):
     """Get current authenticated user"""
+    from models import User
+    
     token = credentials.credentials
     payload = decode_access_token(token)
     
@@ -45,14 +50,14 @@ async def get_current_user(credentials: HTTPAuthCredentials = Depends(security))
     return user
 
 
-async def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
+async def get_current_active_user(current_user = Depends(get_current_user)):
     """Get current active user"""
     return current_user
 
 
-async def require_role(required_role: str):
+def require_role(required_role: str):
     """Dependency to require specific role"""
-    async def role_checker(current_user: User = Depends(get_current_user)) -> User:
+    def role_checker(current_user = Depends(get_current_user)):
         role_hierarchy = {"admin": 3, "librarian": 2, "member": 1}
         
         user_level = role_hierarchy.get(current_user.role, 0)

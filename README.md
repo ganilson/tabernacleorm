@@ -229,10 +229,10 @@ Connection strings are auto-detected:
 pip install tabernacleorm
 
 # Install with specific drivers
-pip install tabernacleorm[mongodb]
-pip install tabernacleorm[postgresql]
-pip install tabernacleorm[mysql]
-pip install tabernacleorm[all]
+pip install tabernacleorm[mongodb]     # Installs motor + pymongo
+pip install tabernacleorm[postgresql]  # Installs asyncpg
+pip install tabernacleorm[mysql]       # Installs aiomysql
+pip install tabernacleorm[all]         # Installs all drivers
 ```
 
 ## Supported Python Versions

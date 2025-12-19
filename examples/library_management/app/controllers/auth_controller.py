@@ -42,16 +42,18 @@ async def register(request: RegisterRequest):
         
         token = AuthService.create_token(user)
         
+        user_dict = {
+            "id": str(getattr(user, 'id', '')),
+            "username": getattr(user, 'username', ''),
+            "email": getattr(user, 'email', ''),
+            "full_name": getattr(user, 'full_name', ''),
+            "role": getattr(user, 'role', 'member')
+        }
+        
         return {
             "access_token": token,
             "token_type": "bearer",
-            "user": {
-                "id": str(user.id),
-                "username": user.username,
-                "email": user.email,
-                "full_name": user.full_name,
-                "role": user.role
-            }
+            "user": user_dict
         }
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -70,14 +72,16 @@ async def login(request: LoginRequest):
     
     token = AuthService.create_token(user)
     
+    user_dict = {
+        "id": str(getattr(user, 'id', '')),
+        "username": getattr(user, 'username', ''),
+        "email": getattr(user, 'email', ''),
+        "full_name": getattr(user, 'full_name', ''),
+        "role": getattr(user, 'role', 'member')
+    }
+    
     return {
         "access_token": token,
         "token_type": "bearer",
-        "user": {
-            "id": str(user.id),
-            "username": user.username,
-            "email": user.email,
-            "full_name": user.full_name,
-            "role": user.role
-        }
+        "user": user_dict
     }

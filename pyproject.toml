@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabernacleorm"
-version = "2.1.0"
+version = "2.1.1"
 description = "A unified, multi-engine async ORM for Python (MongoDB, PostgreSQL, MySQL, SQLite)"
 readme = "README.md"
 license = {text = "MIT"}
@@ -33,8 +33,16 @@ dependencies = []
 [project.optional-dependencies]
 postgresql = ["asyncpg>=0.27.0"]
 mysql = ["aiomysql>=0.1.1"]
-mongodb = ["motor>=3.1.0"]
-all = ["asyncpg>=0.27.0", "aiomysql>=0.1.1", "motor>=3.1.0"]
+mongodb = [
+    "motor>=3.1.0",
+    "pymongo>=4.0.0"
+]
+all = [
+    "asyncpg>=0.27.0",
+    "aiomysql>=0.1.1",
+    "motor>=3.1.0",
+    "pymongo>=4.0.0"
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",

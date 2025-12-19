@@ -1,91 +1,92 @@
 """
-Library Management System - Models
-Demonstrates TabernacleORM models with relationships
+Models for Library Management System
 """
 
+from tabernacleorm import Model, Field, BooleanField, StringField, DateTimeField, ForeignKey, FloatField, IntegerField
 from datetime import datetime
-from tabernacleorm import Model, fields
+from typing import Optional
 
 
 class User(Model):
-    """User model with role-based access"""
-    username = fields.StringField(required=True, unique=True)
-    email = fields.StringField(required=True, unique=True)
-    password_hash = fields.StringField(required=True)
-    full_name = fields.StringField(required=True)
-    role = fields.StringField(default="member")  # admin, librarian, member
-    is_active = fields.BooleanField(default=True)
-    created_at = fields.DateTimeField(auto_now_add=True)
+    """User model"""
+    username: str = Field(unique=True, index=True, required=True)
+    email: str = Field(unique=True, index=True)
+    password_hash: str = StringField(required=True)
+    full_name: str = StringField(max_length=100)
+    role: str = Field(default="member")  # admin, librarian, member
+    is_active: bool = BooleanField(default=True)
+    created_at: datetime = DateTimeField(auto_now_add=True)
+    updated_at: datetime = DateTimeField(auto_now_add=True)
     
-    class Meta:
-        collection = "users"
+    class Config:
+        table_name = "users"
 
 
 class Author(Model):
     """Author model"""
-    name = fields.StringField(required=True)
-    bio = fields.StringField()
-    birth_year = fields.IntegerField(nullable=True)
-    nationality = fields.StringField()
-    created_at = fields.DateTimeField(auto_now_add=True)
+    name: str = StringField(index=True, required=True)
+    email: Optional[str] = StringField(required=False)
+    bio: Optional[str] = StringField(max_length=500, required=False)
+    created_at: datetime = DateTimeField(auto_now_add=True)
     
-    class Meta:
-        collection = "authors"
+    class Config:
+        table_name = "authors"
 
 
 class Category(Model):
-    """Book category model"""
-    name = fields.StringField(required=True, unique=True)
-    description = fields.StringField()
-    created_at = fields.DateTimeField(auto_now_add=True)
+    """Category model"""
+    name: str = StringField(unique=True, index=True, required=True)
+    description: Optional[str] = StringField(required=False)
+    created_at: datetime = DateTimeField(auto_now_add=True)
     
-    class Meta:
-        collection = "categories"
+    class Config:
+        table_name = "categories"
 
 
 class Book(Model):
-    """Book model with relationships"""
-    isbn = fields.StringField(required=True, unique=True)
-    title = fields.StringField(required=True)
-    description = fields.StringField()
-    author_id = fields.ForeignKey(Author, required=True)
-    category_id = fields.ForeignKey(Category, required=True)
-    publisher = fields.StringField()
-    publication_year = fields.IntegerField()
-    pages = fields.IntegerField()
-    copies_available = fields.IntegerField(default=1)
-    total_copies = fields.IntegerField(default=1)
-    language = fields.StringField(default="Portuguese")
-    cover_image = fields.StringField(nullable=True)
-    created_at = fields.DateTimeField(auto_now_add=True)
+    """Book model"""
+    title: str = StringField(index=True, required=True)
+    isbn: str = StringField(unique=True, index=True, required=True)
+    author_id = ForeignKey("Author")
+    category_id = ForeignKey("Category")
+    description: Optional[str] = StringField(required=False)
+    available_copies: int = IntegerField(default=1)
+    total_copies: int = IntegerField(default=1)
+    published_date: Optional[datetime] = DateTimeField(required=False)
+    created_at: datetime = DateTimeField(auto_now_add=True)
+    updated_at: datetime = DateTimeField(auto_now_add=True)
     
-    class Meta:
-        collection = "books"
+    class Config:
+        table_name = "books"
 
 
 class Loan(Model):
-    """Loan/Borrow model"""
-    book_id = fields.ForeignKey(Book, required=True)
-    user_id = fields.ForeignKey(User, required=True)
-    loan_date = fields.DateTimeField(auto_now_add=True)
-    due_date = fields.DateTimeField(required=True)
-    return_date = fields.DateTimeField(nullable=True)
-    status = fields.StringField(default="active")  # active, returned, overdue
-    fine_amount = fields.FloatField(default=0.0)
-    notes = fields.StringField(nullable=True)
+    """Loan model"""
+    book_id = ForeignKey("Book")
+    user_id = ForeignKey("User")
+    loan_date: datetime = DateTimeField(auto_now_add=True)
+    due_date: datetime = DateTimeField(required=True)
+    return_date: Optional[datetime] = DateTimeField(required=False)
+    status: str = StringField(default="active")  # active, returned, overdue
+    fine_amount: float = FloatField(default=0.0)
+    created_at: datetime = DateTimeField(auto_now_add=True)
+    updated_at: datetime = DateTimeField(auto_now_add=True)
     
-    class Meta:
-        collection = "loans"
+    class Config:
+        table_name = "loans"
 
 
 class Reservation(Model):
-    """Book reservation model"""
-    book_id = fields.ForeignKey(Book, required=True)
-    user_id = fields.ForeignKey(User, required=True)
-    reservation_date = fields.DateTimeField(auto_now_add=True)
-    expiry_date = fields.DateTimeField(required=True)
-    status = fields.StringField(default="pending")  # pending, fulfilled, cancelled, expired
-    notified = fields.BooleanField(default=False)
+    """Reservation model"""
+    book_id = ForeignKey("Book")
+    user_id = ForeignKey("User")
+    reservation_date: datetime = DateTimeField(auto_now_add=True)
+    status: str = StringField(default="pending")  # pending, ready, cancelled
+    created_at: datetime = DateTimeField(auto_now_add=True)
+    updated_at: datetime = DateTimeField(auto_now_add=True)
     
-    class Meta:
-        collection = "reservations"
+    class Config:
+        table_name = "reservations"
+
+
+__all__ = ["User", "Author", "Category", "Book", "Loan", "Reservation"]

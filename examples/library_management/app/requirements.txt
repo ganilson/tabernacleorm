@@ -3,8 +3,10 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+bcrypt==4.1.1
 python-multipart==0.0.6
+motor==3.4.0
+pymongo==4.6.0
 
 # TabernacleORM (install from local or PyPI)
 # For local development:

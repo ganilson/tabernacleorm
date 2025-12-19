@@ -1,6 +1,6 @@
 """
 Loan Service - Business logic for loan operations
-Demonstrates: complex queries, populate, date calculations
+Demonstrates: populate, where queries, date calculations
 """
 
 from datetime import datetime, timedelta
@@ -13,46 +13,45 @@ class LoanService:
     """Service for loan operations"""
     
     @staticmethod
-    async def create_loan(user_id: str, book_id: str) -> Loan:
-        """
-        Create a new loan
-        Demonstrates: business logic, stock management
-        """
-        # Check if book is available
-        book = await Book.findById(book_id)
+    async def create_loan(book_id: str, user_id: str, duration_days: Optional[int] = None) -> Loan:
+        """Create a new loan"""
+        # Check if book exists
+        book = await Book.findOne({"_id": book_id})
         if not book:
             raise ValueError("Book not found")
         
-        if book.copies_available <= 0:
+        if book.available_copies <= 0:
             raise ValueError("Book not available")
         
-        # Check user's active loans
+        # Check user's active loans using where query
         active_loans = await Loan.find({"user_id": user_id, "status": "active"}).exec()
         if len(active_loans) >= settings.MAX_LOANS_PER_USER:
             raise ValueError(f"Maximum loans ({settings.MAX_LOANS_PER_USER}) reached")
         
         # Create loan
-        loan_date = datetime.now()
-        due_date = loan_date + timedelta(days=settings.DEFAULT_LOAN_DAYS)
+        loan_date = datetime.utcnow()
+        duration = duration_days or settings.DEFAULT_LOAN_DAYS
+        due_date = loan_date + timedelta(days=duration)
         
         loan = await Loan.create(
             book_id=book_id,
             user_id=user_id,
-            loan_date=loan_date,
             due_date=due_date,
             status="active"
         )
         
         # Update book availability
-        book.copies_available -= 1
-        await book.save()
+        await Book.findOneAndUpdate(
+            {"_id": book_id},
+            {"$set": {"available_copies": book.available_copies - 1}}
+        )
         
         return loan
     
     @staticmethod
     async def return_loan(loan_id: str) -> Loan:
         """Return a loan"""
-        loan = await Loan.findById(loan_id)
+        loan = await Loan.findOne({"_id": loan_id})
         if not loan:
             raise ValueError("Loan not found")
         
@@ -60,7 +59,7 @@ class LoanService:
             raise ValueError("Loan is not active")
         
         # Calculate fine if overdue
-        return_date = datetime.now()
+        return_date = datetime.utcnow()
         fine_amount = 0.0
         
         if return_date > loan.due_date:
@@ -68,120 +67,63 @@ class LoanService:
             fine_amount = days_overdue * settings.FINE_PER_DAY
         
         # Update loan
-        loan.return_date = return_date
-        loan.status = "returned"
-        loan.fine_amount = fine_amount
-        await loan.save()
+        updated_loan = await Loan.findOneAndUpdate(
+            {"_id": loan_id},
+            {"$set": {
+                "return_date": return_date,
+                "status": "returned",
+                "fine_amount": fine_amount
+            }},
+            new=True
+        )
         
         # Update book availability
-        book = await Book.findById(loan.book_id)
+        book = await Book.findOne({"_id": loan.book_id})
         if book:
-            book.copies_available += 1
-            await book.save()
+            await Book.findOneAndUpdate(
+                {"_id": loan.book_id},
+                {"$set": {"available_copies": book.available_copies + 1}}
+            )
         
+        return updated_loan
+    
+    @staticmethod
+    async def get_loan(loan_id: str) -> Optional[Loan]:
+        """Get a specific loan with populated data"""
+        loan = await Loan.findOne({"_id": loan_id}).populate("book_id").populate("user_id").exec()
         return loan
     
     @staticmethod
     async def get_user_loans(user_id: str, status: Optional[str] = None) -> List[Loan]:
-        """
-        Get user's loans with populated book info
-        Demonstrates: populate
-        """
+        """Get user's loans with populated book info"""
         query = {"user_id": user_id}
         if status:
             query["status"] = status
         
-        loans = await Loan.find(query).sort("-loan_date").populate("book_id").exec()
+        loans = await Loan.find(query).populate("book_id").sort("-loan_date").exec()
         return loans
     
     @staticmethod
     async def get_overdue_loans() -> List[Loan]:
-        """
-        Get all overdue loans
-        Demonstrates: date filtering, populate
-        """
-        now = datetime.now()
+        """Get all overdue loans using where query"""
+        now = datetime.utcnow()
         
-        # Get active loans
-        loans = await Loan.find({"status": "active"}).populate("user_id").populate("book_id").exec()
-        
-        # Filter overdue
-        overdue = [loan for loan in loans if loan.due_date < now]
+        # Get active loans with due_date in past
+        overdue_loans = await Loan.find().where("status").eq("active").where("due_date").lt(now).populate("book_id").populate("user_id").exec()
         
         # Update status
-        for loan in overdue:
-            loan.status = "overdue"
-            await loan.save()
+        for loan in overdue_loans:
+            await Loan.findOneAndUpdate(
+                {"_id": loan.id},
+                {"$set": {"status": "overdue"}}
+            )
         
-        return overdue
+        return overdue_loans
     
     @staticmethod
-    async def get_loan_statistics() -> dict:
-        """
-        Get loan statistics
-        Demonstrates: aggregation, groupBy
-        """
-        all_loans = await Loan.findMany()
-        
-        stats = {
-            "total_loans": len(all_loans),
-            "active_loans": 0,
-            "returned_loans": 0,
-            "overdue_loans": 0,
-            "total_fines": 0.0,
-            "by_status": {}
-        }
-        
-        for loan in all_loans:
-            # Count by status
-            stats["by_status"][loan.status] = stats["by_status"].get(loan.status, 0) + 1
-            
-            # Count specific statuses
-            if loan.status == "active":
-                stats["active_loans"] += 1
-            elif loan.status == "returned":
-                stats["returned_loans"] += 1
-            elif loan.status == "overdue":
-                stats["overdue_loans"] += 1
-            
-            # Sum fines
-            stats["total_fines"] += loan.fine_amount
-        
-        return stats
-    
-    @staticmethod
-    async def get_user_borrowing_history(user_id: str) -> dict:
-        """
-        Get user's complete borrowing history
-        Demonstrates: lookup, aggregation
-        """
-        loans = await Loan.find({"user_id": user_id}).populate("book_id").exec()
-        
-        history = {
-            "total_loans": len(loans),
-            "active_loans": 0,
-            "returned_loans": 0,
-            "total_fines": 0.0,
-            "books_borrowed": []
-        }
-        
-        book_set = set()
-        
-        for loan in loans:
-            if loan.status == "active":
-                history["active_loans"] += 1
-            elif loan.status == "returned":
-                history["returned_loans"] += 1
-            
-            history["total_fines"] += loan.fine_amount
-            
-            if hasattr(loan.book_id, 'id'):
-                book_id = str(loan.book_id.id)
-                if book_id not in book_set:
-                    book_set.add(book_id)
-                    history["books_borrowed"].append({
-                        "title": loan.book_id.title,
-                        "isbn": loan.book_id.isbn
-                    })
-        
-        return history
+    async def get_loans_with_filter(skip: int = 0, limit: int = 20) -> List[Loan]:
+        """Get loans with complex filtering: active or overdue with sorting"""
+        loans = await Loan.find({
+            "status": {"$in": ["active", "overdue"]}
+        }).populate("book_id").populate("user_id").sort("-due_date").skip(skip).limit(limit).exec()
+        return loans

@@ -1,52 +1,42 @@
 """
-Statistics Controller
-Demonstrates: aggregations, groupBy, lookup
+Statistics Controller - Demonstrates count, aggregation, and complex queries
 """
 
 from fastapi import APIRouter, Depends
-from services.loan_service import LoanService
-from utils.dependencies import require_role
+from pydantic import BaseModel
 from models import User
+from services.stats_service import StatsService
+from utils.dependencies import require_role
 
 router = APIRouter()
 
 
-@router.get("/loans")
-async def get_loan_statistics(current_user: User = Depends(require_role("librarian"))):
-    """
-    Get overall loan statistics
-    Demonstrates: aggregation, groupBy
-    """
-    stats = await LoanService.get_loan_statistics()
+class StatsResponse(BaseModel):
+    total_books: int
+    total_users: int
+    active_loans: int
+    overdue_loans: int
+    reserved_books: int
+    total_revenue_from_fines: float
+
+
+class UserStatsResponse(BaseModel):
+    total_loans: int
+    active_loans: int
+    overdue_loans: int
+    total_fines: float
+
+
+@router.get("/", response_model=StatsResponse)
+async def get_stats(current_user: User = Depends(require_role("admin"))):
+    """Get system statistics - Demonstrates count() and aggregation queries (admin only)"""
+    stats = await StatsService.get_system_stats()
     return stats
 
 
-@router.get("/dashboard")
-async def get_dashboard_stats(current_user: User = Depends(require_role("librarian"))):
-    """
-    Get dashboard statistics
-    Demonstrates: multiple aggregations
-    """
-    from app.services.book_service import BookService
-    from app.models import Book, User as UserModel, Author
-    
-    # Get various stats
-    loan_stats = await LoanService.get_loan_statistics()
-    category_stats = await BookService.get_category_statistics()
-    most_borrowed = await BookService.get_most_borrowed_books(5)
-    
-    # Count totals
-    total_books = await Book.count()
-    total_users = await UserModel.count()
-    total_authors = await Author.count()
-    
-    return {
-        "totals": {
-            "books": total_books,
-            "users": total_users,
-            "authors": total_authors
-        },
-        "loans": loan_stats,
-        "categories": category_stats,
-        "most_borrowed": most_borrowed
-    }
+@router.get("/my-stats", response_model=UserStatsResponse)
+async def get_my_stats(current_user: User = Depends(lambda: None)):
+    """Get user's statistics - Demonstrates filtered find() and count() queries"""
+    user_id = str(getattr(current_user, 'id', ''))
+    stats = await StatsService.get_user_stats(user_id)
+    return stats
