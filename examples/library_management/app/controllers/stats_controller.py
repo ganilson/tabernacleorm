@@ -4,9 +4,9 @@ Demonstrates: aggregations, groupBy, lookup
 """
 
 from fastapi import APIRouter, Depends
-from app.services.loan_service import LoanService
-from app.utils.dependencies import require_role
-from app.models import User
+from services.loan_service import LoanService
+from utils.dependencies import require_role
+from models import User
 
 router = APIRouter()
 

@@ -30,6 +30,8 @@ class QuerySet:
         self._lookups: List[Dict[str, Any]] = []
         self._hint: Optional[str] = None
         self._no_cache: bool = False
+        self._lean: bool = False
+        self._current_field: Optional[str] = None
     
     def __await__(self):
         """Allow awaiting the queryset directly (executes find)."""
@@ -195,6 +197,226 @@ class QuerySet:
         qs._no_cache = True
         return qs
     
+    def where(self, *args, **kwargs) -> "QuerySet":
+        """
+        Chainable filter method (Mongoose-style).
+        
+        Usage:
+            .where("age", 18)
+            .where({"age": {"$gt": 18}})
+            .where("age").gt(18)  # When used with comparison methods
+        """
+        qs = self._clone()
+        
+        if len(args) == 1 and isinstance(args[0], dict):
+            # .where({"age": 18})
+            qs._query.update(args[0])
+        elif len(args) == 2:
+            # .where("age", 18)
+            qs._query[args[0]] = args[1]
+        elif len(args) == 1 and isinstance(args[0], str):
+            # .where("age") - store field for chaining with gt/lt/etc
+            qs._current_field = args[0]
+        elif kwargs:
+            # .where(age=18)
+            qs._query.update(kwargs)
+        
+        return qs
+    
+    def or_(self, conditions: List[Dict[str, Any]]) -> "QuerySet":
+        """
+        OR query.
+        
+        Usage:
+            .or_([{"age": {"$gt": 18}}, {"status": "premium"}])
+        """
+        qs = self._clone()
+        qs._query["$or"] = conditions
+        return qs
+    
+    def and_(self, conditions: List[Dict[str, Any]]) -> "QuerySet":
+        """
+        AND query (explicit).
+        
+        Usage:
+            .and_([{"age": {"$gt": 18}}, {"status": "active"}])
+        """
+        qs = self._clone()
+        qs._query["$and"] = conditions
+        return qs
+    
+    def nor(self, conditions: List[Dict[str, Any]]) -> "QuerySet":
+        """
+        NOR query (none of the conditions should be true).
+        
+        Usage:
+            .nor([{"age": {"$lt": 18}}, {"status": "banned"}])
+        """
+        qs = self._clone()
+        qs._query["$nor"] = conditions
+        return qs
+    
+    def gt(self, value: Any) -> "QuerySet":
+        """
+        Greater than comparison.
+        
+        Usage:
+            .where("age").gt(18)
+        """
+        qs = self._clone()
+        field = getattr(qs, "_current_field", None)
+        if not field:
+            raise ValueError("gt() must be used after where(field)")
+        
+        if field not in qs._query:
+            qs._query[field] = {}
+        if isinstance(qs._query[field], dict):
+            qs._query[field]["$gt"] = value
+        else:
+            qs._query[field] = {"$gt": value}
+        
+        return qs
+    
+    def gte(self, value: Any) -> "QuerySet":
+        """Greater than or equal comparison."""
+        qs = self._clone()
+        field = getattr(qs, "_current_field", None)
+        if not field:
+            raise ValueError("gte() must be used after where(field)")
+        
+        if field not in qs._query:
+            qs._query[field] = {}
+        if isinstance(qs._query[field], dict):
+            qs._query[field]["$gte"] = value
+        else:
+            qs._query[field] = {"$gte": value}
+        
+        return qs
+    
+    def lt(self, value: Any) -> "QuerySet":
+        """Less than comparison."""
+        qs = self._clone()
+        field = getattr(qs, "_current_field", None)
+        if not field:
+            raise ValueError("lt() must be used after where(field)")
+        
+        if field not in qs._query:
+            qs._query[field] = {}
+        if isinstance(qs._query[field], dict):
+            qs._query[field]["$lt"] = value
+        else:
+            qs._query[field] = {"$lt": value}
+        
+        return qs
+    
+    def lte(self, value: Any) -> "QuerySet":
+        """Less than or equal comparison."""
+        qs = self._clone()
+        field = getattr(qs, "_current_field", None)
+        if not field:
+            raise ValueError("lte() must be used after where(field)")
+        
+        if field not in qs._query:
+            qs._query[field] = {}
+        if isinstance(qs._query[field], dict):
+            qs._query[field]["$lte"] = value
+        else:
+            qs._query[field] = {"$lte": value}
+        
+        return qs
+    
+    def in_(self, values: List[Any]) -> "QuerySet":
+        """
+        IN operator (value in list).
+        
+        Usage:
+            .where("status").in_(["active", "pending"])
+        """
+        qs = self._clone()
+        field = getattr(qs, "_current_field", None)
+        if not field:
+            raise ValueError("in_() must be used after where(field)")
+        
+        qs._query[field] = {"$in": values}
+        return qs
+    
+    def nin(self, values: List[Any]) -> "QuerySet":
+        """
+        NOT IN operator (value not in list).
+        
+        Usage:
+            .where("status").nin(["banned", "deleted"])
+        """
+        qs = self._clone()
+        field = getattr(qs, "_current_field", None)
+        if not field:
+            raise ValueError("nin() must be used after where(field)")
+        
+        qs._query[field] = {"$nin": values}
+        return qs
+    
+    def regex(self, pattern: str, options: str = "") -> "QuerySet":
+        """
+        Regex pattern matching.
+        
+        Usage:
+            .where("name").regex("^John", "i")  # Case-insensitive
+        """
+        qs = self._clone()
+        field = getattr(qs, "_current_field", None)
+        if not field:
+            raise ValueError("regex() must be used after where(field)")
+        
+        regex_query = {"$regex": pattern}
+        if options:
+            regex_query["$options"] = options
+        
+        qs._query[field] = regex_query
+        return qs
+    
+    def lean(self) -> "QuerySet":
+        """
+        Return plain dicts instead of Model instances (performance optimization).
+        
+        Usage:
+            .find().lean().exec()  # Returns list of dicts
+        """
+        qs = self._clone()
+        qs._lean = True
+        return qs
+    
+    async def exists(self) -> Union[bool, Any]:
+        """
+        Check if any document matches the query.
+        
+        Returns:
+            First document ID if exists, None otherwise
+        """
+        doc = await self.first()
+        return doc.id if doc else None
+    
+    async def distinct(self, field: str) -> List[Any]:
+        """
+        Get distinct values for a field in the query results.
+        
+        Args:
+            field: Field name
+            
+        Returns:
+            List of distinct values
+        """
+        docs = await self.exec()
+        values = set()
+        for doc in docs:
+            val = getattr(doc, field, None)
+            if val is not None:
+                if isinstance(val, list):
+                    values.update(val)
+                else:
+                    values.add(val)
+        return list(values)
+    
+    
     async def exec(self) -> List["Model"]:
         """Execute the query and return list of model instances."""
         db = self.model._get_db()
@@ -291,48 +513,148 @@ class QuerySet:
         return args
             
     async def _handle_populate(self, instances: List["Model"]):
-        """Handle population logic."""
-        # This is a complex topic usually. Simplified version:
-        # Collect IDs for each populated field
-        # Fetch related documents
-        # Assign to instances
+        """
+        Handle population logic with support for:
+        - Nested populations (e.g., "author.department")
+        - Field selection via 'select'
+        - Filtering via 'match'
+        - Options (limit, sort, etc.)
+        """
+        if not instances:
+            return
         
         for pop_spec in self._populate:
-            path = pop_spec["path"]
+            await self._populate_field(instances, pop_spec)
+    
+    async def _populate_field(self, instances: List["Model"], pop_spec: Dict[str, Any]):
+        """Populate a single field specification."""
+        path = pop_spec["path"]
+        select = pop_spec.get("select")
+        match = pop_spec.get("match")
+        options = pop_spec.get("options", {})
+        
+        # Handle nested paths (e.g., "author.department")
+        if "." in path:
+            await self._populate_nested(instances, pop_spec)
+            return
+        
+        # Find the field definition to get related model
+        field = self.model._fields.get(path)
+        if not field or not hasattr(field, "get_related_model"):
+            return
             
-            # Find the field definition to get related model
-            field = self.model._fields.get(path)
-            if not field or not hasattr(field, "get_related_model"):
-                continue
-                
-            related_model = field.get_related_model()
-            if not related_model:
-                continue
-            
-            # Collect IDs
-            ids = set()
-            for instance in instances:
-                val = getattr(instance, path, None)
-                if val:
-                    ids.add(val)
-            
-            if not ids:
-                continue
-            
-            # Fetch related docs
-            # TODO: Support 'select', 'match', etc. from pop_spec
-            related_docs = await related_model.find({"id": {"$in": list(ids)}}).exec()
-            doc_map = {str(d.id): d for d in related_docs}
-            
-            # Assign back
-            for instance in instances:
-                val = getattr(instance, path, None)
-                if val:
-                    # Check matching types (str vs UUID vs ObjectId etc) is tricky
-                    # Assuming str conversion for mapping
+        related_model = field.get_related_model()
+        if not related_model:
+            return
+        
+        # Collect IDs
+        ids = set()
+        for instance in instances:
+            val = getattr(instance, path, None)
+            if val:
+                # Handle both single values and lists (for array references)
+                if isinstance(val, list):
+                    ids.update(str(v) for v in val if v)
+                else:
+                    ids.add(str(val))
+        
+        if not ids:
+            return
+        
+        # Build query for related documents
+        query = {"id": {"$in": list(ids)}}
+        
+        # Apply match filter if provided
+        if match:
+            query.update(match)
+        
+        # Build QuerySet with options
+        qs = related_model.find(query)
+        
+        # Apply select (projection)
+        if select:
+            if isinstance(select, str):
+                select = select.split()
+            qs = qs.select(*select)
+        
+        # Apply options (sort, limit, skip)
+        if "sort" in options:
+            sort_arg = options["sort"]
+            if isinstance(sort_arg, str):
+                qs = qs.sort(sort_arg)
+            elif isinstance(sort_arg, list):
+                qs = qs.sort(*sort_arg)
+        
+        if "limit" in options:
+            qs = qs.limit(options["limit"])
+        
+        if "skip" in options:
+            qs = qs.skip(options["skip"])
+        
+        # Execute query
+        related_docs = await qs.exec()
+        doc_map = {str(d.id): d for d in related_docs}
+        
+        # Assign back to instances
+        for instance in instances:
+            val = getattr(instance, path, None)
+            if val:
+                if isinstance(val, list):
+                    # Populate array of references
+                    populated = []
+                    for v in val:
+                        key = str(v)
+                        if key in doc_map:
+                            populated.append(doc_map[key])
+                    setattr(instance, path, populated)
+                else:
+                    # Populate single reference
                     key = str(val)
                     if key in doc_map:
                         setattr(instance, path, doc_map[key])
+    
+    async def _populate_nested(self, instances: List["Model"], pop_spec: Dict[str, Any]):
+        """Handle nested population (e.g., 'author.department')."""
+        path = pop_spec["path"]
+        parts = path.split(".", 1)
+        first_field = parts[0]
+        remaining_path = parts[1] if len(parts) > 1 else None
+        
+        # First, populate the first level
+        first_spec = {
+            "path": first_field,
+            "select": pop_spec.get("select"),
+            "match": pop_spec.get("match"),
+            "options": pop_spec.get("options", {})
+        }
+        await self._populate_field(instances, first_spec)
+        
+        # If there's a remaining path, populate it on the populated instances
+        if remaining_path:
+            # Collect all populated instances from the first level
+            nested_instances = []
+            for instance in instances:
+                val = getattr(instance, first_field, None)
+                if val:
+                    if isinstance(val, list):
+                        nested_instances.extend(val)
+                    else:
+                        nested_instances.append(val)
+            
+            if nested_instances:
+                # Create a temporary QuerySet for the nested model
+                if nested_instances:
+                    nested_model = type(nested_instances[0])
+                    temp_qs = QuerySet(nested_model)
+                    
+                    # Populate the remaining path
+                    nested_spec = {
+                        "path": remaining_path,
+                        "select": pop_spec.get("select"),
+                        "match": pop_spec.get("match"),
+                        "options": pop_spec.get("options", {})
+                    }
+                    await temp_qs._populate_field(nested_instances, nested_spec)
 
     def _clone(self) -> "QuerySet":
         """Create a copy of this queryset."""
@@ -346,6 +668,8 @@ class QuerySet:
         qs._lookups = copy.deepcopy(self._lookups)
         qs._hint = self._hint
         qs._no_cache = self._no_cache
+        qs._lean = self._lean
+        qs._current_field = getattr(self, "_current_field", None)
         return qs
     
     # Utilities

@@ -3,7 +3,7 @@ Database connection and initialization
 """
 
 from tabernacleorm import connect
-from app.config import settings
+from config import settings
 
 # Database instance
 db = None
@@ -16,7 +16,7 @@ async def init_db():
     await db.connect()
     
     # Import models to ensure they're registered
-    from app.models import User, Author, Category, Book, Loan, Reservation
+    from models import User, Author, Category, Book, Loan, Reservation
     
     # Create tables
     await User.createTable()

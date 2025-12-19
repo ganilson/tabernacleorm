@@ -6,9 +6,9 @@ Demonstrates: CRUD operations, populate, groupBy
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import List, Optional
 from pydantic import BaseModel
-from app.services.book_service import BookService
-from app.utils.dependencies import get_current_user, require_role
-from app.models import User
+from services.book_service import BookService
+from utils.dependencies import get_current_user, require_role
+from models import User
 
 router = APIRouter()
 

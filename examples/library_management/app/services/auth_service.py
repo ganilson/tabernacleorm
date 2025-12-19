@@ -4,9 +4,9 @@ Authentication Service
 
 from datetime import timedelta
 from typing import Optional
-from app.models import User
-from app.utils.security import hash_password, verify_password, create_access_token
-from app.config import settings
+from models import User
+from utils.security import hash_password, verify_password, create_access_token
+from config import settings
 
 
 class AuthService:

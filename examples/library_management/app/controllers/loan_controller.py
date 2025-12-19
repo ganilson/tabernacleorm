@@ -4,9 +4,9 @@ Loan Controller
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from app.services.loan_service import LoanService
-from app.utils.dependencies import get_current_user, require_role
-from app.models import User
+from services.loan_service import LoanService
+from utils.dependencies import get_current_user, require_role
+from models import User
 
 router = APIRouter()
 

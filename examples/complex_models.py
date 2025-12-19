@@ -8,7 +8,7 @@ class Department(Model):
     name = fields.StringField(required=True, unique=True)
     budget = fields.FloatField(default=0.0)
     
-    class Meta:
+    class Meta: 
         collection = "departments"
 
 class Student(Model):
@@ -41,7 +41,7 @@ class Enrollment(Model):
 
 async def main():
     # Connect
-    await connect("sqlite:///university.db").connect()
+    await connect("mongodb://localhost:27017/complex").connect()
     
     # NOTE: In a real app, you would run:
     # tabernacle makemigrations
@@ -72,6 +72,8 @@ async def main():
     await Enrollment.create(student_id=s1.id, course_id=c1.id)
     await Enrollment.create(student_id=s1.id, course_id=c2.id)
     
+    
+    
     # 3. Aggregation / Complex Query
     print("Finding all enrollments for Alice...")
     # This would use lookup/join logic in a real query builder
@@ -80,6 +82,7 @@ async def main():
         # Fetch related course (manual populate for now, lookup support coming)
         course = await Course.findById(e.course_id)
         print(f"- Enrolled in: {course.title} ({course.code})")
-
+        
+        
 if __name__ == "__main__":
     asyncio.run(main())

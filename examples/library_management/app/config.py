@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     # MongoDB Atlas: mongodb+srv://user:pass@cluster.mongodb.net/library?retryWrites=true&w=majority
     
     # MongoDB Replica Set Configuration
-    MONGODB_REPLICA_SET: str = None  # e.g., "rs0"
+    MONGODB_REPLICA_SET: str = ""  # e.g., "rs0"
     MONGODB_READ_PREFERENCE: str = "secondaryPreferred"  # primary, secondary, secondaryPreferred
     MONGODB_WRITE_CONCERN: int = 1  # 0 = no acknowledgment, 1 = acknowledged, majority
     

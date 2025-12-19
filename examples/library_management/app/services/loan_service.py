@@ -5,8 +5,8 @@ Demonstrates: complex queries, populate, date calculations
 
 from datetime import datetime, timedelta
 from typing import List, Optional
-from app.models import Loan, Book, User
-from app.config import settings
+from models import Loan, Book, User
+from config import settings
 
 
 class LoanService:

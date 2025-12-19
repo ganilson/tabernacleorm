@@ -4,7 +4,7 @@ Authentication Controller
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, EmailStr
-from app.services.auth_service import AuthService
+from services.auth_service import AuthService
 
 router = APIRouter()
 

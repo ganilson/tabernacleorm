@@ -273,6 +273,170 @@ class Model(HookMixin, metaclass=ModelMeta):
         return await db.aggregate(cls.__collection__, pipeline)
     
     @classmethod
+    async def findOneAndUpdate(
+        cls,
+        query: Dict[str, Any],
+        update: Dict[str, Any],
+        *,
+        new: bool = False,
+        upsert: bool = False
+    ) -> Optional["Model"]:
+        """
+        Find a document and update it atomically.
+        
+        Args:
+            query: Filter to find document
+            update: Update operations (e.g., {"$set": {"name": "John"}})
+            new: If True, return updated document; if False, return original
+            upsert: If True, create document if it doesn't exist
+            
+        Returns:
+            Model instance (original or updated based on 'new' parameter)
+        """
+        db = cls._get_db()
+        
+        # Get original document if needed
+        if not new:
+            original = await cls.findOne(query)
+        
+        # Perform update
+        result = await db.updateOne(cls.__collection__, query, update, upsert=upsert)
+        
+        if not new:
+            return original
+        
+        # Fetch and return updated document
+        return await cls.findOne(query)
+    
+    @classmethod
+    async def findByIdAndUpdate(
+        cls,
+        id: Any,
+        update: Dict[str, Any],
+        *,
+        new: bool = False,
+        upsert: bool = False
+    ) -> Optional["Model"]:
+        """
+        Find a document by ID and update it atomically.
+        
+        Args:
+            id: Document ID
+            update: Update operations
+            new: If True, return updated document
+            upsert: If True, create document if it doesn't exist
+            
+        Returns:
+            Model instance
+        """
+        return await cls.findOneAndUpdate(
+            {"id": id}, update, new=new, upsert=upsert
+        )
+    
+    @classmethod
+    async def findOneAndDelete(cls, query: Dict[str, Any]) -> Optional["Model"]:
+        """
+        Find a document and delete it atomically.
+        
+        Args:
+            query: Filter to find document
+            
+        Returns:
+            Deleted document or None
+        """
+        doc = await cls.findOne(query)
+        if doc:
+            await doc.delete()
+        return doc
+    
+    @classmethod
+    async def findByIdAndDelete(cls, id: Any) -> Optional["Model"]:
+        """
+        Find a document by ID and delete it atomically.
+        
+        Args:
+            id: Document ID
+            
+        Returns:
+            Deleted document or None
+        """
+        return await cls.findOneAndDelete({"id": id})
+    
+    @classmethod
+    async def exists(cls, query: Dict[str, Any]) -> Union[bool, Any]:
+        """
+        Check if a document exists.
+        
+        Args:
+            query: Filter conditions
+            
+        Returns:
+            Document ID if exists, None otherwise
+        """
+        doc = await cls.findOne(query)
+        return doc.id if doc else None
+    
+    @classmethod
+    async def countDocuments(cls, query: Optional[Dict[str, Any]] = None) -> int:
+        """
+        Count documents (Mongoose alias for count).
+        
+        Args:
+            query: Optional filter conditions
+            
+        Returns:
+            Number of documents
+        """
+        return await cls.count(query)
+    
+    @classmethod
+    async def distinct(cls, field: str, query: Optional[Dict[str, Any]] = None) -> List[Any]:
+        """
+        Get distinct values for a field.
+        
+        Args:
+            field: Field name
+            query: Optional filter conditions
+            
+        Returns:
+            List of distinct values
+        """
+        db = cls._get_db()
+        
+        # Fetch all matching documents
+        docs = await cls.find(query).exec() if query else await cls.findMany()
+        
+        # Extract unique values
+        values = set()
+        for doc in docs:
+            val = getattr(doc, field, None)
+            if val is not None:
+                # Handle lists
+                if isinstance(val, list):
+                    values.update(val)
+                else:
+                    values.add(val)
+        
+        return list(values)
+    
+    @classmethod
+    def where(cls, field: str) -> "QuerySet":
+        """
+        Start a query with a field condition (chainable).
+        
+        Usage:
+            User.where("age").gt(18)
+            
+        Returns:
+            QuerySet instance
+        """
+        from ..query.queryset import QuerySet
+        qs = QuerySet(cls)
+        qs._current_field = field  # Store for chaining
+        return qs
+    
+    
+    @classmethod
     async def createTable(cls) -> None:
         """Create the table/collection for this model."""
         schema = {}

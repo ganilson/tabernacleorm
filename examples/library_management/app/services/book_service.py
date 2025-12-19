@@ -5,7 +5,7 @@ Demonstrates: populate, complex queries, groupBy
 
 from typing import List, Optional, Dict
 from datetime import datetime
-from app.models import Book, Author, Category, Loan
+from models import Book, Author, Category, Loan
 
 
 class BookService:

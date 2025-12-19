@@ -4,8 +4,8 @@ FastAPI dependencies
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthCredentials
-from app.utils.security import decode_access_token
-from app.models import User
+from utils.security import decode_access_token
+from models import User
 
 security = HTTPBearer()
 

@@ -5,11 +5,11 @@ Library Management System
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.database import init_db, close_db
-from app.config import settings
+from database import init_db, close_db
+from config import settings
 
 # Import controllers
-from app.controllers import auth_controller, book_controller, loan_controller, stats_controller
+from controllers import auth_controller, book_controller, loan_controller, stats_controller
 
 # Create FastAPI app
 app = FastAPI(
