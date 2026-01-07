@@ -19,7 +19,6 @@ class BaseEngine(ABC):
     
     def __init__(self, config):
         self.config = config
-        self._connection = None
         self._connected = False
     
     # ==================== Connection ====================
@@ -38,6 +37,16 @@ class BaseEngine(ABC):
     def is_connected(self) -> bool:
         """Check if connected to database."""
         return self._connected
+
+    @abstractmethod
+    async def acquireConnection(self) -> Any:
+        """Acquire a connection from the pool."""
+        pass
+
+    @abstractmethod
+    async def releaseConnection(self, connection: Any) -> None:
+        """Release a connection back to the pool."""
+        pass
     
     # ==================== CRUD Operations ====================
     
@@ -45,7 +54,8 @@ class BaseEngine(ABC):
     async def insertOne(
         self,
         collection: str,
-        document: Dict[str, Any]
+        document: Dict[str, Any],
+        _connection: Any = None
     ) -> Any:
         """
         Insert a single document.
@@ -64,7 +74,8 @@ class BaseEngine(ABC):
         self,
         collection: str,
         documents: List[Dict[str, Any]],
-        batch_size: int = 100
+        batch_size: int = 100,
+        _connection: Any = None
     ) -> List[Any]:
         """
         Insert multiple documents.
@@ -84,7 +95,8 @@ class BaseEngine(ABC):
         self,
         collection: str,
         query: Dict[str, Any],
-        projection: Optional[List[str]] = None
+        projection: Optional[List[str]] = None,
+        _connection: Any = None
     ) -> Optional[Dict[str, Any]]:
         """
         Find a single document.
@@ -107,7 +119,8 @@ class BaseEngine(ABC):
         projection: Optional[List[str]] = None,
         sort: Optional[List[Tuple[str, int]]] = None,
         skip: int = 0,
-        limit: int = 0
+        limit: int = 0,
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """
         Find multiple documents.
@@ -131,7 +144,8 @@ class BaseEngine(ABC):
         collection: str,
         query: Dict[str, Any],
         update: Dict[str, Any],
-        upsert: bool = False
+        upsert: bool = False,
+        _connection: Any = None
     ) -> int:
         """
         Update a single document.
@@ -152,7 +166,8 @@ class BaseEngine(ABC):
         self,
         collection: str,
         query: Dict[str, Any],
-        update: Dict[str, Any]
+        update: Dict[str, Any],
+        _connection: Any = None
     ) -> int:
         """
         Update multiple documents.
@@ -171,7 +186,8 @@ class BaseEngine(ABC):
     async def deleteOne(
         self,
         collection: str,
-        query: Dict[str, Any]
+        query: Dict[str, Any],
+        _connection: Any = None
     ) -> int:
         """
         Delete a single document.
@@ -189,7 +205,8 @@ class BaseEngine(ABC):
     async def deleteMany(
         self,
         collection: str,
-        query: Dict[str, Any]
+        query: Dict[str, Any],
+        _connection: Any = None
     ) -> int:
         """
         Delete multiple documents.
@@ -207,7 +224,8 @@ class BaseEngine(ABC):
     async def count(
         self,
         collection: str,
-        query: Dict[str, Any]
+        query: Dict[str, Any],
+        _connection: Any = None
     ) -> int:
         """
         Count documents matching query.
@@ -227,7 +245,8 @@ class BaseEngine(ABC):
     async def aggregate(
         self,
         collection: str,
-        pipeline: List[Dict[str, Any]]
+        pipeline: List[Dict[str, Any]],
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """
         Execute aggregation pipeline.
@@ -327,32 +346,41 @@ class BaseEngine(ABC):
         """
         Transaction context manager.
         
+        Returns a Session object that is in a transaction.
+        
         Usage:
-            async with engine.transaction():
-                await engine.insertOne(...)
-                await engine.updateOne(...)
+            async with engine.transaction() as session:
+                await session.insertOne(...)
+                await session.updateOne(...)
         """
-        await self._beginTransaction()
+        from ..session import Session
+        
+        conn = await self.acquireConnection()
+        session = Session(self, conn)
+        await self.beginTransaction(conn)
+        session._in_transaction = True
         try:
-            yield self
-            await self._commitTransaction()
+            yield session
+            await session.commit()
         except Exception:
-            await self._rollbackTransaction()
+            await session.rollback()
             raise
+        finally:
+            await self.releaseConnection(conn)
     
     @abstractmethod
-    async def _beginTransaction(self) -> None:
-        """Begin a transaction."""
+    async def beginTransaction(self, connection: Any) -> None:
+        """Begin a transaction on the connection."""
         pass
     
     @abstractmethod
-    async def _commitTransaction(self) -> None:
-        """Commit the current transaction."""
+    async def commitTransaction(self, connection: Any) -> None:
+        """Commit the transaction on the connection."""
         pass
     
     @abstractmethod
-    async def _rollbackTransaction(self) -> None:
-        """Rollback the current transaction."""
+    async def rollbackTransaction(self, connection: Any) -> None:
+        """Rollback the transaction on the connection."""
         pass
     
     # ==================== Query Building ====================

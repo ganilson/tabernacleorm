@@ -8,6 +8,8 @@ from uuid import UUID
 import json
 
 from .base import BaseEngine
+from typing import AsyncGenerator
+from contextlib import asynccontextmanager
 
 
 class PostgreSQLEngine(BaseEngine):
@@ -20,7 +22,6 @@ class PostgreSQLEngine(BaseEngine):
     def __init__(self, config):
         super().__init__(config)
         self._pool = None
-        self._transaction = None
     
     async def connect(self) -> None:
         """Establish connection to PostgreSQL database."""
@@ -35,14 +36,24 @@ class PostgreSQLEngine(BaseEngine):
         # Build connection string
         url = self.config.url
         if not url.startswith("postgresql://") and not url.startswith("postgres://"):
+            import urllib.parse
             user = self.config.user or "postgres"
             password = self.config.password or ""
+            # Escape password to handle special characters
+            if password:
+                password = urllib.parse.quote_plus(password)
+            
             host, rest = url.split("/") if "/" in url else (url, self.config.database or "postgres")
             if ":" in host:
                 host, port = host.split(":")
             else:
                 port = "5432"
-            url = f"postgresql://{user}:{password}@{host}:{port}/{rest}"
+            
+            # Construct robust URL
+            if password:
+                url = f"postgresql://{user}:{password}@{host}:{port}/{rest}"
+            else:
+                url = f"postgresql://{user}@{host}:{port}/{rest}"
         
         self._pool = await asyncpg.create_pool(
             url,
@@ -61,12 +72,30 @@ class PostgreSQLEngine(BaseEngine):
             await self._pool.close()
             self._pool = None
             self._connected = False
+
+    async def acquireConnection(self) -> Any:
+        """Acquire a connection from the pool."""
+        return await self._pool.acquire()
+
+    async def releaseConnection(self, connection: Any) -> None:
+        """Release a connection back to the pool."""
+        await self._pool.release(connection)
+    
+    @asynccontextmanager
+    async def _get_conn(self, _connection: Optional[Any] = None) -> AsyncGenerator[Any, None]:
+        """Get a connection (either provided or from pool)."""
+        if _connection:
+            yield _connection
+        else:
+            async with self._pool.acquire() as conn:
+                yield conn
     
     async def _execute(
         self,
         sql: str,
         params: Optional[Tuple] = None,
-        fetch: bool = True
+        fetch: bool = True,
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """Execute SQL query."""
         if self.config.echo:
@@ -76,9 +105,6 @@ class PostgreSQLEngine(BaseEngine):
         
         # Convert ? placeholders to $1, $2, etc. for asyncpg
         if params:
-            for i in range(len(params), 0, -1):
-                sql = sql.replace("?", f"${i}", 1)
-            sql = sql.replace("?", f"${len(params) + 1}")
             # Fix: proper replacement
             sql_new = ""
             param_idx = 1
@@ -90,10 +116,7 @@ class PostgreSQLEngine(BaseEngine):
                     sql_new += char
             sql = sql_new if "?" not in sql else sql
         
-        async with self._pool.acquire() as conn:
-            if self._transaction:
-                conn = self._transaction
-            
+        async with self._get_conn(_connection) as conn:
             if fetch:
                 rows = await conn.fetch(sql, *params)
                 return [dict(row) for row in rows]
@@ -104,7 +127,8 @@ class PostgreSQLEngine(BaseEngine):
     async def insertOne(
         self,
         collection: str,
-        document: Dict[str, Any]
+        document: Dict[str, Any],
+        _connection: Any = None
     ) -> Any:
         """Insert a single document."""
         fields = []
@@ -121,15 +145,16 @@ class PostgreSQLEngine(BaseEngine):
         
         sql = f"INSERT INTO {collection} ({', '.join(fields)}) VALUES ({', '.join(placeholders)}) RETURNING id"
         
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             row = await conn.fetchrow(sql, *values)
             return row["id"] if row else None
     
-    async def insert_many(
+    async def insertMany(
         self,
         collection: str,
         documents: List[Dict[str, Any]],
-        batch_size: int = 100
+        batch_size: int = 100,
+        _connection: Any = None
     ) -> List[Any]:
         """Insert multiple documents using COPY or batch inserts."""
         ids = []
@@ -138,31 +163,33 @@ class PostgreSQLEngine(BaseEngine):
         for i in range(0, len(documents), batch_size):
             batch = documents[i:i + batch_size]
             for doc in batch:
-                doc_id = await self.insert_one(collection, doc)
+                doc_id = await self.insertOne(collection, doc, _connection=_connection)
                 ids.append(doc_id)
         
         return ids
     
-    async def find_one(
+    async def findOne(
         self,
         collection: str,
         query: Dict[str, Any],
-        projection: Optional[List[str]] = None
+        projection: Optional[List[str]] = None,
+        _connection: Any = None
     ) -> Optional[Dict[str, Any]]:
         """Find a single document."""
-        results = await self.find_many(
-            collection, query, projection=projection, limit=1
+        results = await self.findMany(
+            collection, query, projection=projection, limit=1, _connection=_connection
         )
         return results[0] if results else None
     
-    async def find_many(
+    async def findMany(
         self,
         collection: str,
         query: Dict[str, Any],
         projection: Optional[List[str]] = None,
         sort: Optional[List[Tuple[str, int]]] = None,
         skip: int = 0,
-        limit: int = 0
+        limit: int = 0,
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """Find multiple documents."""
         fields = ", ".join(projection) if projection else "*"
@@ -185,24 +212,25 @@ class PostgreSQLEngine(BaseEngine):
         if skip > 0:
             sql += f" OFFSET {skip}"
         
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             rows = await conn.fetch(sql, *params)
             return [self._deserialize_row(dict(row)) for row in rows]
     
-    async def update_one(
+    async def updateOne(
         self,
         collection: str,
         query: Dict[str, Any],
         update: Dict[str, Any],
-        upsert: bool = False
+        upsert: bool = False,
+        _connection: Any = None
     ) -> int:
         """Update a single document."""
         update_data = update.get("$set", update)
         
-        doc = await self.find_one(collection, query, projection=["id"])
+        doc = await self.findOne(collection, query, projection=["id"])
         
         if not doc and upsert:
-            await self.insert_one(collection, {**query, **update_data})
+            await self.insertOne(collection, {**query, **update_data}, _connection=_connection)
             return 1
         elif not doc:
             return 0
@@ -223,11 +251,12 @@ class PostgreSQLEngine(BaseEngine):
             result = await conn.execute(sql, *values)
             return int(result.split()[-1]) if result else 0
     
-    async def update_many(
+    async def updateMany(
         self,
         collection: str,
         query: Dict[str, Any],
-        update: Dict[str, Any]
+        update: Dict[str, Any],
+        _connection: Any = None
     ) -> int:
         """Update multiple documents."""
         update_data = update.get("$set", update)
@@ -253,18 +282,18 @@ class PostgreSQLEngine(BaseEngine):
             result = await conn.execute(sql, *values)
             return int(result.split()[-1]) if result else 0
     
-    async def delete_one(self, collection: str, query: Dict[str, Any]) -> int:
+    async def deleteOne(self, collection: str, query: Dict[str, Any], _connection: Any = None) -> int:
         """Delete a single document."""
-        doc = await self.find_one(collection, query, projection=["id"])
+        doc = await self.findOne(collection, query, projection=["id"], _connection=_connection)
         if not doc:
             return 0
         
         sql = f"DELETE FROM {collection} WHERE id = $1"
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             await conn.execute(sql, doc["id"])
             return 1
     
-    async def delete_many(self, collection: str, query: Dict[str, Any]) -> int:
+    async def deleteMany(self, collection: str, query: Dict[str, Any], _connection: Any = None) -> int:
         """Delete multiple documents."""
         sql = f"DELETE FROM {collection}"
         params = []
@@ -275,11 +304,11 @@ class PostgreSQLEngine(BaseEngine):
                 sql += f" WHERE {conditions}"
                 params.extend(cond_params)
         
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             result = await conn.execute(sql, *params)
             return int(result.split()[-1]) if result else 0
     
-    async def count(self, collection: str, query: Dict[str, Any]) -> int:
+    async def count(self, collection: str, query: Dict[str, Any], _connection: Any = None) -> int:
         """Count documents matching query."""
         sql = f"SELECT COUNT(*) as count FROM {collection}"
         params = []
@@ -290,14 +319,15 @@ class PostgreSQLEngine(BaseEngine):
                 sql += f" WHERE {conditions}"
                 params.extend(cond_params)
         
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             row = await conn.fetchrow(sql, *params)
             return row["count"] if row else 0
     
     async def aggregate(
         self,
         collection: str,
-        pipeline: List[Dict[str, Any]]
+        pipeline: List[Dict[str, Any]],
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """Execute aggregation pipeline (translated to SQL)."""
         # Similar to SQLite implementation
@@ -362,11 +392,11 @@ class PostgreSQLEngine(BaseEngine):
                 sql_parts.append(f"GROUP BY {group_by}")
         
         sql = " ".join(sql_parts)
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             rows = await conn.fetch(sql, *params)
             return [dict(row) for row in rows]
     
-    async def create_collection(
+    async def createCollection(
         self,
         name: str,
         schema: Optional[Dict[str, Any]] = None
@@ -381,12 +411,12 @@ class PostgreSQLEngine(BaseEngine):
         async with self._pool.acquire() as conn:
             await conn.execute(sql)
     
-    async def drop_collection(self, name: str) -> None:
+    async def dropCollection(self, name: str) -> None:
         """Drop a table."""
         async with self._pool.acquire() as conn:
             await conn.execute(f"DROP TABLE IF EXISTS {name} CASCADE")
     
-    async def collection_exists(self, name: str) -> bool:
+    async def collectionExists(self, name: str) -> bool:
         """Check if table exists."""
         sql = """
             SELECT EXISTS (
@@ -398,7 +428,7 @@ class PostgreSQLEngine(BaseEngine):
             row = await conn.fetchrow(sql, name)
             return row[0] if row else False
     
-    async def create_index(
+    async def createIndex(
         self,
         collection: str,
         fields: List[str],
@@ -416,39 +446,40 @@ class PostgreSQLEngine(BaseEngine):
             await conn.execute(sql)
         return name
     
-    async def drop_index(self, collection: str, name: str) -> None:
+    async def dropIndex(self, collection: str, name: str) -> None:
         """Drop an index."""
         async with self._pool.acquire() as conn:
             await conn.execute(f"DROP INDEX IF EXISTS {name}")
     
-    async def _begin_transaction(self) -> None:
+    async def beginTransaction(self, connection: Any) -> None:
         """Begin a transaction."""
-        self._transaction = await self._pool.acquire()
-        await self._transaction.execute("BEGIN")
+        transaction = connection.transaction()
+        await transaction.start()
+        # Store transaction object on connection if needed, but asyncpg manages it via start() context
+        # Actually asyncpg transactions are context managers or objects. 
+        # If we manually start, we must manually commit.
+        # However, asyncpg connection.transaction() returns a Transaction object.
+        # We need to keep a reference to it if we want to commit/rollback specifically it, 
+        # BUT the session holds the connection.
+        # To make this simple with asyncpg: "BEGIN".
+        await connection.execute("BEGIN")
     
-    async def _commit_transaction(self) -> None:
+    async def commitTransaction(self, connection: Any) -> None:
         """Commit the current transaction."""
-        if self._transaction:
-            await self._transaction.execute("COMMIT")
-            await self._pool.release(self._transaction)
-            self._transaction = None
+        await connection.execute("COMMIT")
     
-    async def _rollback_transaction(self) -> None:
+    async def rollbackTransaction(self, connection: Any) -> None:
         """Rollback the current transaction."""
-        if self._transaction:
-            await self._transaction.execute("ROLLBACK")
-            await self._pool.release(self._transaction)
-            self._transaction = None
+        await connection.execute("ROLLBACK")
     
-    async def execute_raw(
+    async def executeRaw(
         self,
         query: str,
         params: Optional[Tuple] = None
     ) -> List[Dict[str, Any]]:
         """Execute a raw SQL query."""
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(query, *(params or []))
-            return [dict(row) for row in rows]
+        # This reuses _execute logic which we updated to handle connections optionally
+        return await self._execute(query, params, fetch=True)
     
     async def explain(
         self,
