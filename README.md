@@ -1,4 +1,4 @@
-# TabernacleORM 2.1.4 🐍⚡
+# TabernacleORM 2.1.5 🐍⚡
 
 **The Async, Pydantic-powered ORM for Python.**
 
@@ -14,6 +14,8 @@ TabernacleORM is a modern, lightweight, and fully async Object-Relational Mapper
 *   **Lifecycle Hooks**: `before_save`, `after_create`, etc., for powerful automation.
 *   **Stateless Sessions**: Thread-safe and concurrency-safe session management.
 *   **Read/Write Splitting**: Native support for replicas and high availability.
+*   **CLI & Migrations**: Django-style migration system for both SQL and NoSQL.
+*   **Weighted Load Balancing**: Distribute traffic across replicas with ease.
 
 ## Installation
 
@@ -23,6 +25,24 @@ pip install tabernacleorm
 pip install tabernacleorm[postgresql]
 pip install tabernacleorm[mysql]
 pip install tabernacleorm[mongodb]
+```
+
+## CLI & Migrations 🚀
+
+TabernacleORM includes a powerful CLI to manage migrations for all supported databases.
+
+```bash
+# Initialize project
+tabernacle init
+
+# Create a new migration based on your models
+tabernacle makemigrations "initial_schema"
+
+# Apply pending migrations
+tabernacle migrate
+
+# Rollback last migration
+tabernacle rollback
 ```
 
 ## Quickstart

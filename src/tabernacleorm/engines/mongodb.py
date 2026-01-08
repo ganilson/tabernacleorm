@@ -388,3 +388,10 @@ class MongoDBEngine(BaseEngine):
     def denormalizeId(self, id_value: Any) -> str:
         """Convert MongoDB ObjectId to string."""
         return str(id_value) if id_value else None
+
+    def generateCreateTableSQL(self, table_name: str, columns: List[Dict[str, Any]]) -> str:
+        """
+        MongoDB is schema-less, but we can ensure collection exists or create indexes.
+        For now, simply ignore SQL generation to avoid errors in auto-creation.
+        """
+        return ""

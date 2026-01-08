@@ -3,12 +3,13 @@ Base Model class for TabernacleORM.
 Fully async, Pydantic-based, with support for advanced ORM features.
 """
 
+from __future__ import annotations
 from typing import Any, Dict, List, Optional, Type, TypeVar, Union, ClassVar, Coroutine, Tuple
 from datetime import datetime
 from pydantic import BaseModel, Field as PydanticField
 from pydantic.fields import FieldInfo
 from pydantic._internal._model_construction import ModelMetaclass as PydanticMetaclass
-from ..fields import Field, Relationship, RelationshipInfo
+from ..fields import Field, Relationship, RelationshipInfo, IntegerField
 from ..query.queryset import QuerySet
 from ..core.connection import get_connection
 
@@ -46,9 +47,34 @@ class ModelMetaclass(PydanticMetaclass):
         }
         
         # Check explicit Config for table name override (Pydantic V2 uses class Config or model_config)
-        # We look for a nested Config class standard in standard ORMs or Pydantic V1 compat
-        if hasattr(cls, "Config") and hasattr(cls.Config, "table_name"):
+        # We look for a nested Config class or model_config dict
+        config = namespace.get("Config") or getattr(cls, "Config", None)
+        model_config = namespace.get("model_config") or getattr(cls, "model_config", None)
+        
+        if config and hasattr(config, "table_name"):
+            cls._tabernacle_meta["table_name"] = getattr(config, "table_name")
+        elif model_config and isinstance(model_config, dict) and "table_name" in model_config:
+            cls._tabernacle_meta["table_name"] = model_config["table_name"]
+        elif hasattr(cls, "Config") and hasattr(cls.Config, "table_name"):
+            # Fallback for inherited Config
             cls._tabernacle_meta["table_name"] = cls.Config.table_name
+
+        # Auto-add 'id' field if not present in annotation
+        # Pydantic way involves adding to model_fields or annotations before base init?
+        # But we are in __init__.
+        # Simplest: if 'id' not in annotations, add it?
+        # But Pydantic V2 is strict.
+        # User implies inheritance provides it?
+        # Let's check Model class. It inherits BaseModel.
+        # If we want an auto-ID, Model clss should have it?
+        # Let's check Model definition.
+        
+        # We can dynamically add 'id' to _tabernacle_meta['columns'] even if not in Pydantic fields
+        # BUT then save() / load() logic needs to handle it.
+        # Pydantic needs 'id' field to hold the value.
+        
+        # Best approach: Add `id: Optional[int] = Field(default=None, primary_key=True)` to `Model` base class.
+        pass
 
         for parser_field_name, field_info in cls.model_fields.items():
             extra = field_info.json_schema_extra or {}
@@ -76,6 +102,9 @@ class Model(BaseModel, metaclass=ModelMetaclass):
     """
     Base ORM Model compatible with Pydantic and Tabernacle Engines.
     """
+    # Flexible ID field that works with both SQL (int) and NoSQL (str) engines
+    id: Optional[Union[int, str]] = IntegerField(primary_key=True, auto_increment=True, default=None)
+
     # Internal state
     _persisted: bool = False
     _connection_override: Any = None # For session support
@@ -111,6 +140,16 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         return QuerySet(cls)
 
     @classmethod
+    def find(cls: Type[T], query: Optional[Dict[str, Any]] = None, **kwargs) -> QuerySet[T]:
+        """Find documents matching query."""
+        qs = QuerySet(cls)
+        if query:
+            qs = qs.filter(query)
+        if kwargs:
+            qs = qs.filter(**kwargs)
+        return qs
+
+    @classmethod
     def filter(cls: Type[T], *args, **kwargs) -> QuerySet[T]:
         qs = QuerySet(cls)
         if args:
@@ -130,6 +169,24 @@ class Model(BaseModel, metaclass=ModelMetaclass):
             await instance.save()
             return instance
         return _create()
+        
+    @classmethod
+    async def deleteMany(cls, query: Dict[str, Any]) -> int:
+        """Delete multiple documents matching query."""
+        db = cls.get_engine()
+        return await db.deleteMany(cls.get_table_name(), query)
+        
+    @classmethod
+    async def updateMany(cls, query: Dict[str, Any], update: Dict[str, Any]) -> int:
+        """Update multiple documents matching query."""
+        db = cls.get_engine()
+        return await db.updateMany(cls.get_table_name(), query, update)
+        
+    @classmethod
+    async def aggregate(cls, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Run aggregation pipeline."""
+        db = cls.get_engine()
+        return await db.aggregate(cls.get_table_name(), pipeline)
 
     # ----- CRUD -----
 
@@ -153,7 +210,18 @@ class Model(BaseModel, metaclass=ModelMetaclass):
 
         conn_arg = {"_connection": session_conn} if session_conn else {}
         
-        data = self.model_dump(exclude_unset=True)
+        # Handle auto_now and auto_now_add
+        for field_name, field_info in self.model_fields.items():
+            extra = field_info.json_schema_extra or {}
+            tab_args = extra.get("tabernacle_args", {})
+            if is_create:
+                if tab_args.get("auto_now_add") or tab_args.get("auto_now"):
+                    if getattr(self, field_name) is None:
+                        setattr(self, field_name, datetime.now())
+            elif not is_create and tab_args.get("auto_now"):
+                setattr(self, field_name, datetime.now())
+                
+        data = self.model_dump(exclude_unset=False) # Always dump to include auto-fields
         cleaned = {}
         pk = self.get_pk_field()
         
@@ -318,6 +386,9 @@ class Model(BaseModel, metaclass=ModelMetaclass):
     async def create_table(cls, safe: bool = True):
         """Create table in DB."""
         sql = cls.get_create_table_sql()
+        if not sql:
+            return
+
         engine = cls.get_engine()
         # Wrap in try/except if safe=True to ignore "exists" error, or adding IF NOT EXISTS in SQL
         if safe and "IF NOT EXISTS" not in sql.upper():

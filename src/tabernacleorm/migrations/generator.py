@@ -34,47 +34,56 @@ class MigrationGenerator:
         
         up_operations = []
         down_operations = []
+        processed_models = set()
         
         for model in models:
             if model.__module__ == "tabernacleorm.models.model":
                 continue 
             
-            # Generate schema spec
+            table_name = model.get_table_name()
+            if table_name in processed_models:
+                continue
+            processed_models.add(table_name)
             schema = {}
-            for field_name, field in model._fields.items():
+            for field_name, field_info in model.model_fields.items():
+                extra = field_info.json_schema_extra or {}
+                # Skip relationships
+                if "relationship" in extra:
+                    continue
+                    
+                tab_args = extra.get("tabernacle_args", {})
                 field_type = "string"
-                cls_name = field.__class__.__name__
                 
-                if "Integer" in cls_name or "ForeignKey" in cls_name:
+                # Try to infer type from python type hint if not explicit
+                annotation = field_info.annotation
+                if str(annotation) == "int":
                     field_type = "integer"
-                elif "Boolean" in cls_name:
+                elif str(annotation) == "bool":
                     field_type = "boolean"
-                elif "Float" in cls_name:
+                elif str(annotation) == "float":
                     field_type = "float"
-                elif "Date" in cls_name:
-                    field_type = "datetime" if "Time" in cls_name else "date"
-                elif "JSON" in cls_name:
-                    field_type = "json"
-                elif "Array" in cls_name:
-                    field_type = "array"
+                
+                # Override with explicit tabernacle type if present
+                if "type" in tab_args:
+                    field_type = tab_args["type"]
                 
                 spec = {
                     "type": field_type,
-                    "primary_key": field.primary_key,
-                    "unique": field.unique,
-                    "default": field.default,
+                    "primary_key": tab_args.get("primary_key", False),
+                    "unique": tab_args.get("unique", False),
+                    "default": tab_args.get("default"),
                 }
-                if not field.nullable:
+                if tab_args.get("nullable") is False:
                     spec["required"] = True
-                if hasattr(field, "auto_increment") and field.auto_increment:
+                if tab_args.get("auto_increment"):
                     spec["auto_increment"] = True
 
                 schema[field_name] = spec
             
-            op = f'        await self.createCollection("{model.__collection__}", {repr(schema)})'
+            op = f'        await self.createCollection("{table_name}", {repr(schema)})'
             up_operations.append(op)
             
-            down_op = f'        await self.dropCollection("{model.__collection__}")'
+            down_op = f'        await self.dropCollection("{table_name}")'
             down_operations.append(down_op)
             
         up_content = "\n".join(up_operations)

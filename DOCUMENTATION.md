@@ -18,8 +18,9 @@ This file serves as an index to all documentation available for TabernacleORM.
   - 25+ Mongoose-inspired features
   - Populate (nested, field selection, filters)
   - Query operators (gt, lt, in_, or_, and_)
-  - Find and modify methods
+  - Finding and modify methods
   - Advanced queries (exists, distinct, lean)
+  - **CLI & Migrations System** (v2.1.5)
   - Migration guide from v2.0 to v2.1
 
 ### MongoDB & Replicas

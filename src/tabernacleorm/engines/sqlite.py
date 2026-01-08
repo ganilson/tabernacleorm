@@ -521,50 +521,13 @@ class SQLiteEngine(BaseEngine):
         self,
         query: Dict[str, Any]
     ) -> Tuple[str, List[Any]]:
-        """Build WHERE clause from query dict."""
-        conditions = []
-        params = []
-        
-        for key, value in query.items():
-            if isinstance(value, dict):
-                # Handle operators
-                for op, val in value.items():
-                    if op == "$gt":
-                        conditions.append(f"{key} > ?")
-                        params.append(val)
-                    elif op == "$gte":
-                        conditions.append(f"{key} >= ?")
-                        params.append(val)
-                    elif op == "$lt":
-                        conditions.append(f"{key} < ?")
-                        params.append(val)
-                    elif op == "$lte":
-                        conditions.append(f"{key} <= ?")
-                        params.append(val)
-                    elif op == "$ne":
-                        conditions.append(f"{key} != ?")
-                        params.append(val)
-                    elif op == "$in":
-                        placeholders = ", ".join("?" * len(val))
-                        conditions.append(f"{key} IN ({placeholders})")
-                        params.extend(val)
-                    elif op == "$nin":
-                        placeholders = ", ".join("?" * len(val))
-                        conditions.append(f"{key} NOT IN ({placeholders})")
-                        params.extend(val)
-                    elif op == "$like" or op == "$contains":
-                        conditions.append(f"{key} LIKE ?")
-                        params.append(f"%{val}%")
-                    elif op == "$regex":
-                        conditions.append(f"{key} REGEXP ?")
-                        params.append(val)
-            elif value is None:
-                conditions.append(f"{key} IS NULL")
-            else:
-                conditions.append(f"{key} = ?")
-                params.append(value)
-        
-        return " AND ".join(conditions), params
+        """Build WHERE clause from query dict (using shared translator)."""
+        from .sql_translator import build_where_clause
+        conditions, params = build_where_clause(query, dialect="sqlite")
+        # Translator returns conditions WITHOUT " WHERE " prefix, so add it here
+        if conditions:
+            return conditions, params
+        return "", []
     
     def _serializeValue(self, value: Any) -> Any:
         """Serialize value for storage."""
@@ -627,7 +590,7 @@ class SQLiteEngine(BaseEngine):
         if spec.get("unique") and not spec.get("primary_key"):
             parts.append("UNIQUE")
         
-        if "default" in spec:
+        if "default" in spec and spec["default"] is not None:
             default = spec["default"]
             if isinstance(default, str):
                 parts.append(f"DEFAULT '{default}'")
@@ -635,5 +598,7 @@ class SQLiteEngine(BaseEngine):
                 parts.append(f"DEFAULT {1 if default else 0}")
             else:
                 parts.append(f"DEFAULT {default}")
+        elif "default" in spec and spec["default"] is None:
+            parts.append("DEFAULT NULL")
         
         return " ".join(parts)

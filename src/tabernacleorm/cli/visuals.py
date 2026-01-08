@@ -21,28 +21,22 @@ if os.name == 'nt':
     kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
 
 LOGO = r"""
-  _______      _                                  _       
- |__   __|    | |                                | |      
-    | |  _ __ | | __   ___  _ __  _ __ ___   __ _| | ___  
-    | | | '_ \| |/ /  / _ \| '__|| '_ ` _ \ / _` | |/ _ \ 
-    | | | |_) |   <  | (_) | |   | | | | | | (_| | |  __/ 
-    |_| | .__/|_|\_\  \___/|_|   |_| |_| |_|\__,_|_|\___| 
-        | |                                               
-        |_|                                               
-               Async ORM for Modern Python
+  TabernacleORM
+  Async ORM for Modern Python
 """
+
 
 def print_logo():
     print(f"{Colors.CYAN}{Colors.BOLD}{LOGO}{Colors.ENDC}")
 
 def print_success(msg: str):
-    print(f"{Colors.GREEN}✓ {msg}{Colors.ENDC}")
+    print(f"{Colors.GREEN}[OK] {msg}{Colors.ENDC}")
 
 def print_error(msg: str):
-    print(f"{Colors.FAIL}✗ {msg}{Colors.ENDC}")
+    print(f"{Colors.FAIL}[ERROR] {msg}{Colors.ENDC}")
 
 def print_warning(msg: str):
-    print(f"{Colors.WARNING}! {msg}{Colors.ENDC}")
+    print(f"{Colors.WARNING}[WARN] {msg}{Colors.ENDC}")
 
 def print_info(msg: str):
-    print(f"{Colors.BLUE}ℹ {msg}{Colors.ENDC}")
+    print(f"{Colors.BLUE}[INFO] {msg}{Colors.ENDC}")

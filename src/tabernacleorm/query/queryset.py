@@ -4,14 +4,15 @@ Provides Mongoose-like chainable query API.
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional, Type, Union, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Type, Union, Tuple, TYPE_CHECKING, Generic, TypeVar
 import copy
 
 if TYPE_CHECKING:
     from ..models.model import Model
 
+T = TypeVar("T")
 
-class QuerySet:
+class QuerySet(Generic[T]):
     """
     Lazy query builder.
     
@@ -30,6 +31,7 @@ class QuerySet:
         self._lookups: List[Dict[str, Any]] = []
         self._hint: Optional[str] = None
         self._no_cache: bool = False
+        self._read_preference: Optional[str] = None
     
     def __await__(self):
         """Allow awaiting the queryset directly (executes find)."""
@@ -189,16 +191,30 @@ class QuerySet:
         qs._hint = index_name
         return qs
     
-    def no_cache(self) -> "QuerySet":
-        """Disable caching."""
+    def read_from(self, preference: str) -> "QuerySet":
+        """
+        Set read preference for this query.
+        
+        Args:
+            preference: 'primary', 'secondary', 'secondaryPreferred', 'nearest'
+        """
         qs = self._clone()
-        qs._no_cache = True
+        qs._read_preference = preference
         return qs
     
     async def exec(self) -> List["Model"]:
         """Execute the query and return list of model instances."""
-        db = self.model._get_db()
-        collection = self.model.__collection__
+        # Get engine based on preference if specified
+        if self._read_preference:
+            conn = get_connection()
+            if self._read_preference == 'primary':
+                db = conn.get_write_engine()
+            else:
+                db = conn.get_read_engine()
+        else:
+            db = self.model.get_engine()
+            
+        collection = self.model.get_table_name()
         
         # 1. Fetch main documents
         docs = await db.findMany(
@@ -214,21 +230,26 @@ class QuerySet:
         instances = []
         for doc in docs:
             # Handle denormalization of ID
+            # Handle denormalization of ID
             if "id" in doc:
                 doc["id"] = db.denormalizeId(doc["id"])
             instance = self.model(**doc)
-            instance._is_new = False
-            instance._modified_fields.clear()
+            instance._persisted = True
+            # instance._modified_fields.clear() # Not using dirty tracking yet
             instances.append(instance)
             
-            # Run post_find hook
-            await instance._run_hooks("post_find")
+            # Run post_find hook (not currently in Model spec, skipping for now)
+            # await instance._run_hooks("post_find")
         
         # 2. Handle Populate (Client-Side implementation for compatibility)
         if self._populate and instances:
             await self._handle_populate(instances)
         
         return instances
+
+    async def all(self) -> List["Model"]:
+        """Alias for exec()."""
+        return await self.exec()
     
     async def first(self) -> Optional["Model"]:
         """Execute and return first result."""
@@ -237,8 +258,12 @@ class QuerySet:
     
     async def count(self) -> int:
         """Count documents matching query."""
-        db = self.model._get_db()
-        return await db.count(self.model.__collection__, self._query)
+        if self._read_preference:
+            conn = get_connection()
+            db = conn.get_write_engine() if self._read_preference == 'primary' else conn.get_read_engine()
+        else:
+            db = self.model.get_engine()
+        return await db.count(self.model.get_table_name(), self._query)
     
     async def delete(self) -> int:
         """Delete documents matching query."""
@@ -250,8 +275,8 @@ class QuerySet:
     
     async def explain(self) -> Dict[str, Any]:
         """Explain query plan."""
-        db = self.model._get_db()
-        return await db.explain(self.model.__collection__, self._query)
+        db = self.model.get_engine()
+        return await db.explain(self.model.get_table_name(), self._query)
     
     async def cursor(self, batch_size: int = 100):
         """Async iterator/cursor."""
@@ -292,47 +317,125 @@ class QuerySet:
             
     async def _handle_populate(self, instances: List["Model"]):
         """Handle population logic."""
-        # This is a complex topic usually. Simplified version:
-        # Collect IDs for each populated field
-        # Fetch related documents
-        # Assign to instances
+        meta = self.model._tabernacle_meta
         
         for pop_spec in self._populate:
             path = pop_spec["path"]
             
-            # Find the field definition to get related model
-            field = self.model._fields.get(path)
-            if not field or not hasattr(field, "get_related_model"):
-                continue
+            # --- Case 1: Relationship Field (OneToMany, OneToOne, etc.) ---
+            if path in meta["relationships"]:
+                rel = meta["relationships"][path]
+                target_model_name = rel.link_model
                 
-            related_model = field.get_related_model()
-            if not related_model:
-                continue
-            
-            # Collect IDs
-            ids = set()
-            for instance in instances:
-                val = getattr(instance, path, None)
-                if val:
-                    ids.add(val)
-            
-            if not ids:
-                continue
-            
-            # Fetch related docs
-            # TODO: Support 'select', 'match', etc. from pop_spec
-            related_docs = await related_model.find({"id": {"$in": list(ids)}}).exec()
-            doc_map = {str(d.id): d for d in related_docs}
-            
-            # Assign back
-            for instance in instances:
-                val = getattr(instance, path, None)
-                if val:
-                    # Check matching types (str vs UUID vs ObjectId etc) is tricky
-                    # Assuming str conversion for mapping
-                    key = str(val)
-                    if key in doc_map:
-                        setattr(instance, path, doc_map[key])
+                try:
+                    if isinstance(target_model_name, type):
+                        related_model = target_model_name
+                    else:
+                        related_model = self.model._resolve_model(target_model_name)
+                        
+                    # 1a. OneToMany (Reverse)
+                    # We are Parent, we want Children where child.fk == parent.id
+                    if rel.type == "OneToMany":
+                        # Collect Parent IDs
+                        parent_ids = [inst.id for inst in instances if inst.id is not None]
+                        if not parent_ids: continue
+                        
+                        # Find children where reverse_field (back_populates?) IN parent_ids
+                        # rel object doesn't have back_populates explicitly stored in 'relationships' dict 
+                        # usually, but let's assume 'fields' logic handles it.
+                        # Wait, 'OneToMany' in fields.py stores arguments.
+                        # We need the foreign key field name on the CHILD model.
+                        
+                        # Convention or explicit config needed?
+                        # Usually OneToMany("Post", back_populates="author_id")
+                        fk_field_on_child = getattr(rel, "back_populates", None)
+                        
+                        if not fk_field_on_child:
+                            # Fallback: try to guess "parent_model_id" or "parent_model"
+                            # We can check registered columns on the related_model
+                            target_meta = getattr(related_model, "_tabernacle_meta", {})
+                            model_name = self.model.__name__.lower()
+                            
+                            # Possible FK names: 'user_id', 'author_id', etc.
+                            possible_fks = [f"{model_name}_id", model_name]
+                            
+                            # Inspect columns for foreign key match
+                            for col_name, col_args in target_meta.get("columns", {}).items():
+                                if col_args.get("foreign_key") == self.model.__name__:
+                                    fk_field_on_child = col_name
+                                    break
+                            
+                            if not fk_field_on_child:
+                                for candidate in possible_fks:
+                                    if candidate in target_meta.get("columns", {}):
+                                        fk_field_on_child = candidate
+                                        break
+                        
+                        if not fk_field_on_child:
+                            continue
+
+                        # Fetch all related children
+                        children = await related_model.find({
+                            fk_field_on_child: {"$in": parent_ids}
+                        }).exec()
+                        
+                        # Map children to parents
+                        children_map = {} # parent_id -> [child1, child2]
+                        for child in children:
+                            p_id = getattr(child, fk_field_on_child)
+                            # Handle object or ID
+                            if hasattr(p_id, "id"): p_id = p_id.id
+                            
+                            p_id_str = str(p_id)
+                            if p_id_str not in children_map:
+                                children_map[p_id_str] = []
+                            children_map[p_id_str].append(child)
+                            
+                        # Assign to instances
+                        for instance in instances:
+                             key = str(instance.id)
+                             if key in children_map:
+                                 setattr(instance, path, children_map[key])
+                             else:
+                                 setattr(instance, path, [])
+                                 
+                    # 1b. OneToOne / ManyToMany (Future)
+                    pass
+                except Exception:
+                    continue
+
+            # --- Case 2: Foreign Key Column (BelongsTo) ---
+            elif path in meta["columns"]:
+                 col_args = meta["columns"][path]
+                 if col_args.get("foreign_key"):
+                     target_model_name = col_args["foreign_key"]
+                     try:
+                        if isinstance(target_model_name, type):
+                            related_model = target_model_name
+                        else:
+                            related_model = self.model._resolve_model(target_model_name)
+                     except Exception:
+                         continue
+                     
+                     # Collect IDs
+                     ids = set()
+                     for instance in instances:
+                         val = getattr(instance, path, None)
+                         if val:
+                             if isinstance(val, related_model): continue
+                             ids.add(val)
+                     
+                     if not ids: continue
+                     
+                     related_docs = await related_model.find({"id": {"$in": list(ids)}}).exec()
+                     doc_map = {str(d.id): d for d in related_docs}
+                     
+                     for instance in instances:
+                         val = getattr(instance, path, None)
+                         if val:
+                             key = str(val)
+                             if key in doc_map:
+                                 setattr(instance, path, doc_map[key])
 
     def _clone(self) -> "QuerySet":
         """Create a copy of this queryset."""

@@ -472,41 +472,18 @@ class MySQLEngine(BaseEngine):
         return await self._execute(query, params)
     
     def _build_where_clause(self, query: Dict[str, Any]) -> Tuple[str, List[Any]]:
-        """Build WHERE clause from query dict."""
-        conditions = []
-        params = []
+        """Build WHERE clause from query dict (using shared translator)."""
+        from .sql_translator import build_where_clause
         
-        for key, value in query.items():
-            if isinstance(value, dict):
-                for op, val in value.items():
-                    if op == "$gt":
-                        conditions.append(f"`{key}` > %s")
-                    elif op == "$gte":
-                        conditions.append(f"`{key}` >= %s")
-                    elif op == "$lt":
-                        conditions.append(f"`{key}` < %s")
-                    elif op == "$lte":
-                        conditions.append(f"`{key}` <= %s")
-                    elif op == "$ne":
-                        conditions.append(f"`{key}` != %s")
-                    elif op == "$in":
-                        placeholders = ", ".join(["%s"] * len(val))
-                        conditions.append(f"`{key}` IN ({placeholders})")
-                        params.extend(val)
-                        continue
-                    elif op == "$like":
-                        conditions.append(f"`{key}` LIKE %s")
-                        val = f"%{val}%"
-                    else:
-                        continue
-                    params.append(val)
-            elif value is None:
-                conditions.append(f"`{key}` IS NULL")
-            else:
-                conditions.append(f"`{key}` = %s")
-                params.append(value)
+        # MySQL uses %s for placeholders (aiomysql)
+        conditions, params = build_where_clause(query, dialect="mysql")
+        if not conditions:
+            return "", []
+            
+        # Convert '?' to '%s'
+        conditions = conditions.replace("?", "%s")
         
-        return " AND ".join(conditions), params
+        return conditions, params
     
     def _serialize_value(self, value: Any) -> Any:
         """Serialize value for storage."""

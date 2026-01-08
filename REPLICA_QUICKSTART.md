@@ -23,10 +23,10 @@ async def search_products(query: str):
     return products
 ```
 
-### Method 2: Query-level (🚧 Coming soon)
+### Method 2: Query-level (✅ Ready to use in v2.1.5)
 
 ```python
-# Future feature
+# Query-level control
 books = await Book.find().read_from("secondary").exec()
 user = await User.findById(id).read_from("primary").exec()
 ```

@@ -17,21 +17,41 @@ class MigrationExecutor:
     
     def __init__(self, migration_dir: str = "migrations"):
         self.migration_dir = migration_dir
-        self.connection = get_connection()
+        self._connection = None
+    
+    @property
+    def connection(self):
+        if self._connection is None:
+            from ..core.connection import get_connection
+            self._connection = get_connection()
+        return self._connection
+
+    async def _ensure_connected(self):
+        """Ensure connection is established and engine is available."""
+        if not self.connection:
+            raise RuntimeError("Database connection not configured. Call connect() first.")
+        
+        if not self.connection.is_connected:
+            await self.connection.connect()
+            
+        if not self.connection.engine:
+            raise RuntimeError("Database engine not initialized. Check your connection URL.")
     
     async def init_migration_table(self):
         """Create the __migrations table if it doesn't exist."""
-        exists = await self.connection.engine.collection_exists("__migrations")
+        await self._ensure_connected()
+        exists = await self.connection.engine.collectionExists("__migrations")
         if not exists:
-            await self.connection.engine.create_collection("__migrations", {
+            await self.connection.engine.createCollection("__migrations", {
                 "name": {"type": "string", "primary_key": True},
                 "applied_at": {"type": "datetime"}
             })
     
     async def get_applied_migrations(self) -> List[str]:
         """Get list of applied migration names."""
+        await self._ensure_connected()
         await self.init_migration_table()
-        rows = await self.connection.engine.find_many("__migrations", {}, sort=[("name", 1)])
+        rows = await self.connection.engine.findMany("__migrations", {}, sort=[("name", 1)])
         return [r["name"] for r in rows]
     
     async def load_migrations(self):
@@ -69,6 +89,7 @@ class MigrationExecutor:
     
     async def migrate(self):
         """Run all pending migrations."""
+        await self._ensure_connected()
         applied = set(await self.get_applied_migrations())
         all_migrations = await self.load_migrations()
         
@@ -82,7 +103,7 @@ class MigrationExecutor:
                     # Record execution
                     # Use current engine's format for datetime if needed
                     now = datetime.now()
-                    await self.connection.engine.insert_one("__migrations", {
+                    await self.connection.engine.insertOne("__migrations", {
                         "name": name,
                         "applied_at": now
                     })
@@ -93,6 +114,7 @@ class MigrationExecutor:
     
     async def rollback(self):
         """Rollback the last migration."""
+        await self._ensure_connected()
         applied = await self.get_applied_migrations()
         if not applied:
             print("No migrations to rollback.")
@@ -113,7 +135,7 @@ class MigrationExecutor:
             migration = migration_cls()
             try:
                 await migration.down()
-                await self.connection.engine.delete_one("__migrations", {"name": last_name})
+                await self.connection.engine.deleteOne("__migrations", {"name": last_name})
                 print(f"Rolled back {last_name}.")
             except Exception as e:
                 print(f"Error rolling back {last_name}: {e}")

@@ -505,46 +505,26 @@ class PostgreSQLEngine(BaseEngine):
         query: Dict[str, Any],
         start_idx: int = 1
     ) -> Tuple[str, List[Any], int]:
-        """Build WHERE clause from query dict."""
-        conditions = []
-        params = []
+        """Build WHERE clause from query dict (using shared translator)."""
+        from .sql_translator import build_where_clause
+        
+        conditions, params = build_where_clause(query, dialect="postgresql")
+        if not conditions:
+            return "", [], start_idx
+            
+        # Convert '?' to '$N'
+        final_conditions = ""
         param_idx = start_idx
         
-        for key, value in query.items():
-            if isinstance(value, dict):
-                for op, val in value.items():
-                    if op == "$gt":
-                        conditions.append(f"{key} > ${param_idx}")
-                    elif op == "$gte":
-                        conditions.append(f"{key} >= ${param_idx}")
-                    elif op == "$lt":
-                        conditions.append(f"{key} < ${param_idx}")
-                    elif op == "$lte":
-                        conditions.append(f"{key} <= ${param_idx}")
-                    elif op == "$ne":
-                        conditions.append(f"{key} != ${param_idx}")
-                    elif op == "$in":
-                        placeholders = ", ".join(f"${param_idx + i}" for i in range(len(val)))
-                        conditions.append(f"{key} IN ({placeholders})")
-                        params.extend(val)
-                        param_idx += len(val) - 1
-                    elif op == "$like":
-                        conditions.append(f"{key} LIKE ${param_idx}")
-                        val = f"%{val}%"
-                    else:
-                        continue
-                    
-                    if op != "$in":
-                        params.append(val)
-                        param_idx += 1
-            elif value is None:
-                conditions.append(f"{key} IS NULL")
-            else:
-                conditions.append(f"{key} = ${param_idx}")
-                params.append(value)
+        # Naive replacement: split by '?'
+        parts = conditions.split("?")
+        for i, part in enumerate(parts):
+            final_conditions += part
+            if i < len(parts) - 1:
+                final_conditions += f"${param_idx}"
                 param_idx += 1
-        
-        return " AND ".join(conditions), params, param_idx
+                
+        return final_conditions, params, param_idx
     
     def _serialize_value(self, value: Any) -> Any:
         """Serialize value for storage."""

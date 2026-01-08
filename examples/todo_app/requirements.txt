@@ -1,0 +1,15 @@
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.5.0
+
+# Install parent tabernacleorm package
+-e ../..
+
+# For MongoDB support
+motor>=3.3.0
+
+# For PostgreSQL support (optional)
+# asyncpg>=0.29.0
+
+# For MySQL support (optional)
+# aiomysql>=0.2.0

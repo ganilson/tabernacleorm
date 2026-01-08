@@ -83,6 +83,7 @@ class Connection:
     def _get_engine_class(self) -> Type:
         """Get the appropriate engine class based on config."""
         engine_name = self.config.engine
+        print(f"DEBUG: Engine name detected: '{engine_name}' for URL: '{self.config.url}'")
         
         if engine_name == "sqlite":
             from ..engines.sqlite import SQLiteEngine
@@ -114,7 +115,11 @@ class Connection:
     
     @property
     def engine(self):
-        """Get the default engine."""
+        """Get the appropriate engine (read or write) based on context preference."""
+        from ..decorators import get_read_preference
+        pref = get_read_preference()
+        if pref and pref != 'primary':
+            return self.get_read_engine()
         return self._engine
     
     @property

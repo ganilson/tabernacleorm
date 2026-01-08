@@ -1,8 +1,20 @@
 # TabernacleORM - Comprehensive Feature Documentation
 
-## New Mongoose-Inspired Features (v2.1.4)
+## New Features (v2.1.5)
 
-### Enhanced Populate Functionality
+### CLI & Migration System 🚀
+
+TabernacleORM now includes a robust migration system compatible with both SQL and NoSQL engines.
+
+- **`tabernacle init`**: Initialize TabernacleORM in your project.
+- **`tabernacle makemigrations "name"`**: Create a new migration based on your model changes.
+- **`tabernacle migrate`**: Apply all pending migrations to the database.
+- **`tabernacle rollback`**: Roll back the last migration.
+
+### 1-to-1 Relationship Support
+Full support for `OneToOne` relationships with automatic ID handling.
+
+### Enhanced Populate Functionality (v2.1.2)
 
 TabernacleORM now supports advanced populate features similar to Mongoose:
 

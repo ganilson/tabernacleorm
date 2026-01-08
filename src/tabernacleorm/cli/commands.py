@@ -5,6 +5,7 @@ CLI commands implementation.
 import sys
 import os
 import asyncio
+import importlib 
 import importlib.util
 
 from ..migrations.generator import MigrationGenerator
@@ -14,24 +15,48 @@ from .visuals import print_success, print_error, print_warning, print_info
 
 def load_app():
     """Attempt to load the user's application/config."""
-    # Look for app.py or main.py to load config/models
-    # Ideally should be configured via a setting
-    sys.path.insert(0, os.getcwd())
+    # Add CWD to path
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
     
-    potential_files = ["app.py", "main.py", "config.py", "wsgi.py", "asgi.py"]
+    # Check for DATABASE_URL env var
+    from ..core.connection import connect, get_connection
+    env_url = os.environ.get("DATABASE_URL")
+    if env_url:
+        print_info(f"Using DATABASE_URL from environment.")
+        connect(env_url)
+    
+    potential_files = ["config.py", "app.py", "main.py", "models.py", "wsgi.py", "asgi.py"]
     found = False
     for f in potential_files:
         if os.path.exists(f):
             print_info(f"Loading {f}...")
-            spec = importlib.util.spec_from_file_location("user_app", f)
-            module = importlib.util.module_from_spec(spec)
+            # We use importlib to load it as a module
+            module_name = f.replace(".py", "")
             try:
-                spec.loader.exec_module(module)
+                # Clear from sys.modules to force reload if needed
+                if module_name in sys.modules:
+                    importlib.reload(sys.modules[module_name])
+                
+                mod = importlib.import_module(module_name)
                 found = True
+                
+                # Look for DATABASE_URL or a connection object
+                url = None
+                if hasattr(mod, "DATABASE_URL"):
+                    url = mod.DATABASE_URL
+                elif hasattr(mod, "settings") and hasattr(mod.settings, "DATABASE_URL"):
+                    url = mod.settings.DATABASE_URL
+                
+                if url and not get_connection():
+                    print_info(f"Found DATABASE_URL in {f}, connecting...")
+                    connect(url)
+                    
             except Exception as e:
                 print_warning(f"Failed to load {f}: {e}")
-    if not found:
-        print_warning("No application entry point found. Models might not be detected.")
+    if not found and not env_url and not get_connection():
+        print_warning("No application entry point or DATABASE_URL found. Models might not be detected.")
 
 async def init_project():
     """Initialize a new TabernacleORM project."""
