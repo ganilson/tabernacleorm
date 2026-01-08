@@ -13,6 +13,8 @@ from .config import Config
 _connection: Optional["Connection"] = None
 
 
+import random
+
 class Connection:
     """
     Database connection manager.
@@ -24,8 +26,7 @@ class Connection:
         self.config = config
         self._engine = None
         self._write_engine = None
-        self._read_engines: List = []
-        self._read_index = 0
+        self._read_engines: List[Tuple[Any, int]] = [] # engine, weight
         self._connected = False
     
     async def connect(self) -> None:
@@ -46,7 +47,7 @@ class Connection:
             for read_config in read_configs:
                 engine = engine_class(read_config)
                 await engine.connect()
-                self._read_engines.append(engine)
+                self._read_engines.append((engine, read_config.weight))
         
         # Default engine is write engine
         self._engine = self._write_engine
@@ -57,7 +58,7 @@ class Connection:
         if self._write_engine:
             await self._write_engine.disconnect()
         
-        for engine in self._read_engines:
+        for engine, _ in self._read_engines:
             await engine.disconnect()
         
         self._connected = False
@@ -80,7 +81,7 @@ class Connection:
             return MongoDBEngine
         else:
             raise ValueError(f"Unsupported engine: {engine_name}")
-    
+
     def get_write_engine(self):
         """Get engine for write operations."""
         return self._write_engine
@@ -90,11 +91,9 @@ class Connection:
         if not self._read_engines:
             return self._write_engine
         
-        # Simple round-robin load balancing
-        # TODO: Implement weight-based selection
-        engine = self._read_engines[self._read_index % len(self._read_engines)]
-        self._read_index += 1
-        return engine
+        # Weighted Load Balancing
+        engines, weights = zip(*self._read_engines)
+        return random.choices(engines, weights=weights, k=1)[0]
     
     @property
     def engine(self):

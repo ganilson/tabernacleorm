@@ -17,10 +17,8 @@ class QuerySet(Generic[T]):
         self._filters: List[Tuple[str, str, Any]] = []
         self._order_by: List[Tuple[str, int]] = [] # field, direction (1 or -1)
         self._limit: int = 0
-        self._offset: int = 0
-        self._projection: Optional[List[str]] = None
-        self._session: Any = None # Optional session for transaction
         self._includes: List[str] = [] # Eager loading
+        self._lean: bool = False # Return plain dicts
     
     def _clone(self) -> "QuerySet[T]":
         """Create a copy of this QuerySet."""
@@ -32,8 +30,52 @@ class QuerySet(Generic[T]):
         clone._projection = self._projection
         clone._session = self._session
         clone._includes = self._includes.copy()
+        clone._lean = self._lean
         return clone
-    
+
+    def lean(self) -> "QuerySet[T]":
+        """Optimize query by returning plain dictionaries instead of Model instances."""
+        clone = self._clone()
+        clone._lean = True
+        return clone
+
+    async def all(self) -> Union[List[T], List[Dict[str, Any]]]:
+        """Execute query and return list of Pydantic models with eager loading."""
+        engine = self.model.get_engine()
+        query = await self._build_engine_query()
+        
+        # Determine connection source
+        conn_arg = {"_connection": self._session.connection} if self._session else {}
+
+        raw_data = await engine.findMany(
+            collection=self.model.get_table_name(),
+            query=query,
+            projection=self._projection,
+            sort=self._order_by,
+            skip=self._offset,
+            limit=self._limit,
+            **conn_arg
+        )
+        
+        if self._lean:
+             return raw_data
+
+        # Convert dictionaries to Pydantic models
+        models = [self.model(**row) for row in raw_data]
+        
+        # Handle Eager Loading
+        if self._includes and models:
+            for relation in self._includes:
+                # Naive implementation: iterate and fetch (N+1 in python app layer, better than nothing)
+                for m in models:
+                    try:
+                        related_data = await m.fetch_related(relation)
+                        setattr(m, relation, related_data)
+                    except Exception:
+                        pass # Relation might fail or not be defined
+                        
+        return models
+
     def with_session(self, session) -> "QuerySet[T]":
         """Bind query to a specific session."""
         clone = self._clone()
@@ -119,8 +161,6 @@ class QuerySet(Generic[T]):
         clone._includes.extend(relations)
         return clone
 
-    # ----- Execution Methods (Async) -----
-
     async def _build_engine_query(self) -> Dict[str, Any]:
         """Convert filters to Engine dictionary format."""
         query = {}
@@ -137,54 +177,7 @@ class QuerySet(Generic[T]):
                 query[field][op] = value
         return query
 
-    async def all(self) -> List[T]:
-        """Execute query and return list of Pydantic models with eager loading."""
-        engine = self.model.get_engine()
-        query = await self._build_engine_query()
-        
-        # Determine connection source
-        conn_arg = {"_connection": self._session.connection} if self._session else {}
 
-        raw_data = await engine.findMany(
-            collection=self.model.get_table_name(),
-            query=query,
-            projection=self._projection,
-            sort=self._order_by,
-            skip=self._offset,
-            limit=self._limit,
-            **conn_arg
-        )
-        
-        # Convert dictionaries to Pydantic models
-        models = [self.model(**row) for row in raw_data]
-        
-        # Handle Eager Loading
-        if self._includes and models:
-            for relation in self._includes:
-                # Naive implementation: iterate and fetch (N+1 in python app layer, better than nothing)
-                # To do it properly: Collect all IDs, fetch related in 1 query, then attach
-                # Logic:
-                # 1. Inspect relationship type
-                # 2. Collect IDs from 'models'
-                # 3. Query target model
-                # 4. Map back to models
-                
-                # For robustness in this iteration, we iterate and call fetch_related
-                # This is inefficient but "complete" for the requirement.
-                # Optimization would go here in v2.2.
-                for m in models:
-                    try:
-                        related_data = await m.fetch_related(relation)
-                        # Attach manually. Since Pydantic models are strict, we might need
-                        # to use __dict__ or rely on fields being Optional/List.
-                        # However, Pydantic defaults relations to None/empty usually.
-                        # We use setattr which works on Pydantic v2 models usually if configured?
-                        # No, Pydantic v2 objects are immutable by default? No, mostly mutable.
-                        setattr(m, relation, related_data)
-                    except Exception:
-                        pass # Relation might fail or not be defined
-                        
-        return models
 
     async def first(self) -> Optional[T]:
         """Get first result."""

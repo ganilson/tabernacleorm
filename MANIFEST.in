@@ -1,0 +1,8 @@
+include README.md
+include LICENSE
+include FEATURES.md
+include DOCUMENTATION.md
+include MONGODB_REPLICAS.md
+include REPLICA_QUICKSTART.md
+include READ_REPLICA_CONTROL.md
+recursive-include examples *

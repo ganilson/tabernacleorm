@@ -48,6 +48,7 @@ class Config:
     echo: bool = False
     ssl: bool = False
     ssl_mode: Optional[str] = None
+    weight: int = 100  # Load balancing weight
     
     # MongoDB specific
     auth_source: Optional[str] = None
