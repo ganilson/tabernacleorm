@@ -1,6 +1,6 @@
 # TabernacleORM - Comprehensive Feature Documentation
 
-## New Mongoose-Inspired Features (v2.1.2)
+## New Mongoose-Inspired Features (v2.1.4)
 
 ### Enhanced Populate Functionality
 
