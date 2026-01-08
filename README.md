@@ -92,7 +92,7 @@ asyncio.run(main())
 *   **[MongoDB Replicas](https://github.com/ganilson/tabernacleorm/blob/main/MONGODB_REPLICAS.md)** - High Availability guide.
 *   **[Replica Control](https://github.com/ganilson/tabernacleorm/blob/main/READ_REPLICA_CONTROL.md)** - granular control over reads.
 
-## New in 2.1.3: Weighted Load Balancing ⚖️
+## New in 2.1.4: Weighted Load Balancing ⚖️
 
 You can now assign weights to read replicas to distribute traffic according to server capacity.
 
