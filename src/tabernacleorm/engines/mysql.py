@@ -8,6 +8,8 @@ from uuid import UUID
 import json
 
 from .base import BaseEngine
+from typing import AsyncGenerator
+from contextlib import asynccontextmanager
 
 
 class MySQLEngine(BaseEngine):
@@ -20,12 +22,12 @@ class MySQLEngine(BaseEngine):
     def __init__(self, config):
         super().__init__(config)
         self._pool = None
-        self._transaction_conn = None
     
     async def connect(self) -> None:
         """Establish connection to MySQL database."""
         try:
             import aiomysql
+            from urllib.parse import urlparse, unquote
         except ImportError:
             raise ImportError(
                 "aiomysql is required for MySQL. "
@@ -34,36 +36,54 @@ class MySQLEngine(BaseEngine):
         
         # Parse connection info
         url = self.config.url or ""
-        if url.startswith("mysql://"):
-            url = url[8:]
         
+        # Default values
         host = "localhost"
         port = 3306
+        user = self.config.user or "root"
+        password = self.config.password or ""
         db = self.config.database or "test"
         
-        if "/" in url:
-            host_part, db = url.split("/", 1)
-            if ":" in host_part:
-                host, port_str = host_part.split(":")
-                port = int(port_str)
-            else:
-                host = host_part
+        if "://" in url:
+            parsed = urlparse(url)
+            if parsed.scheme == "mysql":
+                host = parsed.hostname or host
+                port = parsed.port or port
+                if parsed.username:
+                    user = unquote(parsed.username)
+                if parsed.password:
+                    password = unquote(parsed.password)
+                if parsed.path and parsed.path != "/":
+                    db = parsed.path.lstrip("/")
         
+        # Override with explicit config if provided and not default
+        if self.config.user:
+            user = self.config.user
+        if self.config.password:
+            password = self.config.password
+        if self.config.host:
+            host = self.config.host
+        if self.config.port:
+            port = int(self.config.port)
+        if self.config.database:
+            db = self.config.database
+
         self._pool = await aiomysql.create_pool(
             host=host,
             port=port,
-            user=self.config.user or "root",
-            password=self.config.password or "",
+            user=user,
+            password=password,
             db=db,
-            charset=self.config.charset,
-            autocommit=not self._transaction_conn,
+            charset=self.config.charset or "utf8mb4",
+            autocommit=True, # Auto-commit by default, use transactions explicitly
             minsize=1,
             maxsize=self.config.pool_size,
         )
         self._connected = True
         
         if self.config.echo:
-            print(f"[MySQL] Connected to {host}:{port}/{db}")
+            # Mask password in log
+            print(f"[MySQL] Connected to mysql://{user}:***@{host}:{port}/{db}")
     
     async def disconnect(self) -> None:
         """Close the MySQL connection pool."""
@@ -72,12 +92,27 @@ class MySQLEngine(BaseEngine):
             await self._pool.wait_closed()
             self._pool = None
             self._connected = False
+
+    async def acquireConnection(self) -> Any:
+        return await self._pool.acquire()
+
+    async def releaseConnection(self, connection: Any) -> None:
+        self._pool.release(connection)
+    
+    @asynccontextmanager
+    async def _get_conn(self, _connection: Optional[Any] = None) -> AsyncGenerator[Any, None]:
+        if _connection:
+            yield _connection
+        else:
+            async with self._pool.acquire() as conn:
+                yield conn
     
     async def _execute(
         self,
         sql: str,
         params: Optional[Tuple] = None,
-        fetch: bool = True
+        fetch: bool = True,
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """Execute SQL query."""
         if self.config.echo:
@@ -85,7 +120,7 @@ class MySQLEngine(BaseEngine):
             if params:
                 print(f"[MySQL] Params: {params}")
         
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             async with conn.cursor(aiomysql.DictCursor) as cursor:
                 await cursor.execute(sql, params or ())
                 
@@ -93,12 +128,12 @@ class MySQLEngine(BaseEngine):
                     rows = await cursor.fetchall()
                     return list(rows)
                 else:
-                    if not self._transaction_conn:
+                    if not _connection:
                         await conn.commit()
                     return []
     
 
-    async def insertOne(self, collection: str, document: Dict[str, Any]) -> Any:
+    async def insertOne(self, collection: str, document: Dict[str, Any], _connection: Any = None) -> Any:
         keys = []
         values = []
         placeholders = []
@@ -110,17 +145,19 @@ class MySQLEngine(BaseEngine):
             
         sql = f"INSERT INTO `{collection}` ({', '.join(keys)}) VALUES ({', '.join(placeholders)})"
         
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             async with conn.cursor() as cursor:
                 await cursor.execute(sql, tuple(values))
-                await conn.commit()
+                if not _connection:
+                    await conn.commit()
                 return cursor.lastrowid
     
     async def insertMany(
         self,
         collection: str,
         documents: List[Dict[str, Any]],
-        batch_size: int = 100
+        batch_size: int = 100,
+        _connection: Any = None
     ) -> List[Any]:
         """Insert multiple documents using multi-row INSERT."""
         if not documents:
@@ -131,7 +168,7 @@ class MySQLEngine(BaseEngine):
         for i in range(0, len(documents), batch_size):
             batch = documents[i:i + batch_size]
             for doc in batch:
-                doc_id = await self.insertOne(collection, doc)
+                doc_id = await self.insertOne(collection, doc, _connection=_connection)
                 ids.append(doc_id)
         
         return ids
@@ -140,10 +177,11 @@ class MySQLEngine(BaseEngine):
         self,
         collection: str,
         query: Dict[str, Any],
-        projection: Optional[List[str]] = None
+        projection: Optional[List[str]] = None,
+        _connection: Any = None
     ) -> Optional[Dict[str, Any]]:
         """Find a single document."""
-        results = await self.findMany(collection, query, projection=projection, limit=1)
+        results = await self.findMany(collection, query, projection=projection, limit=1, _connection=_connection)
         return results[0] if results else None
     
     async def findMany(
@@ -153,7 +191,8 @@ class MySQLEngine(BaseEngine):
         projection: Optional[List[str]] = None,
         sort: Optional[List[Tuple[str, int]]] = None,
         skip: int = 0,
-        limit: int = 0
+        limit: int = 0,
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """Find multiple documents."""
         fields = ", ".join(f"`{f}`" for f in projection) if projection else "*"
@@ -180,7 +219,7 @@ class MySQLEngine(BaseEngine):
         except ImportError:
             raise ImportError("aiomysql required")
         
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             async with conn.cursor(aiomysql.DictCursor) as cursor:
                 await cursor.execute(sql, tuple(params))
                 rows = await cursor.fetchall()
@@ -191,15 +230,16 @@ class MySQLEngine(BaseEngine):
         collection: str,
         query: Dict[str, Any],
         update: Dict[str, Any],
-        upsert: bool = False
+        upsert: bool = False,
+        _connection: Any = None
     ) -> int:
         """Update a single document."""
         update_data = update.get("$set", update)
         
-        doc = await self.findOne(collection, query, projection=["id"])
+        doc = await self.findOne(collection, query, projection=["id"], _connection=_connection)
         
         if not doc and upsert:
-            await self.insertOne(collection, {**query, **update_data})
+            await self.insertOne(collection, {**query, **update_data}, _connection=_connection)
             return 1
         elif not doc:
             return 0
@@ -214,17 +254,19 @@ class MySQLEngine(BaseEngine):
         values.append(doc["id"])
         sql = f"UPDATE `{collection}` SET {', '.join(set_parts)} WHERE id = %s"
         
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             async with conn.cursor() as cursor:
                 await cursor.execute(sql, tuple(values))
-                await conn.commit()
+                if not _connection:
+                    await conn.commit()
                 return cursor.rowcount
     
     async def updateMany(
         self,
         collection: str,
         query: Dict[str, Any],
-        update: Dict[str, Any]
+        update: Dict[str, Any],
+        _connection: Any = None
     ) -> int:
         """Update multiple documents."""
         update_data = update.get("$set", update)
@@ -244,27 +286,29 @@ class MySQLEngine(BaseEngine):
                 sql += f" WHERE {conditions}"
                 values.extend(cond_params)
         
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             async with conn.cursor() as cursor:
                 await cursor.execute(sql, tuple(values))
-                await conn.commit()
+                if not _connection:
+                    await conn.commit()
                 return cursor.rowcount
     
-    async def deleteOne(self, collection: str, query: Dict[str, Any]) -> int:
+    async def deleteOne(self, collection: str, query: Dict[str, Any], _connection: Any = None) -> int:
         """Delete a single document."""
-        doc = await self.findOne(collection, query, projection=["id"])
+        doc = await self.findOne(collection, query, projection=["id"], _connection=_connection)
         if not doc:
             return 0
         
         sql = f"DELETE FROM `{collection}` WHERE id = %s"
         
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             async with conn.cursor() as cursor:
                 await cursor.execute(sql, (doc["id"],))
-                await conn.commit()
+                if not _connection:
+                    await conn.commit()
                 return cursor.rowcount
     
-    async def deleteMany(self, collection: str, query: Dict[str, Any]) -> int:
+    async def deleteMany(self, collection: str, query: Dict[str, Any], _connection: Any = None) -> int:
         """Delete multiple documents."""
         sql = f"DELETE FROM `{collection}`"
         params = []
@@ -275,13 +319,14 @@ class MySQLEngine(BaseEngine):
                 sql += f" WHERE {conditions}"
                 params.extend(cond_params)
         
-        async with self._pool.acquire() as conn:
+        async with self._get_conn(_connection) as conn:
             async with conn.cursor() as cursor:
                 await cursor.execute(sql, tuple(params))
-                await conn.commit()
+                if not _connection:
+                    await conn.commit()
                 return cursor.rowcount
     
-    async def count(self, collection: str, query: Dict[str, Any]) -> int:
+    async def count(self, collection: str, query: Dict[str, Any], _connection: Any = None) -> int:
         """Count documents matching query."""
         sql = f"SELECT COUNT(*) as count FROM `{collection}`"
         params = []
@@ -292,13 +337,14 @@ class MySQLEngine(BaseEngine):
                 sql += f" WHERE {conditions}"
                 params.extend(cond_params)
         
-        result = await self._execute(sql, tuple(params) if params else None)
+        result = await self._execute(sql, tuple(params) if params else None, _connection=_connection)
         return result[0]["count"] if result else 0
     
     async def aggregate(
         self,
         collection: str,
-        pipeline: List[Dict[str, Any]]
+        pipeline: List[Dict[str, Any]],
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """Execute aggregation pipeline (translated to SQL)."""
         # Similar to SQLite/PostgreSQL implementation
@@ -353,7 +399,7 @@ class MySQLEngine(BaseEngine):
                 sql_parts.append(f"GROUP BY `{group_by}`")
         
         sql = " ".join(sql_parts)
-        return await self._execute(sql, tuple(params) if params else None)
+        return await self._execute(sql, tuple(params) if params else None, _connection=_connection)
     
     async def createCollection(
         self,
@@ -405,24 +451,17 @@ class MySQLEngine(BaseEngine):
         """Drop an index."""
         await self._execute(f"DROP INDEX `{name}` ON `{collection}`", fetch=False)
     
-    async def _beginTransaction(self) -> None:
+    async def beginTransaction(self, connection: Any) -> None:
         """Begin a transaction."""
-        self._transaction_conn = await self._pool.acquire()
-        await self._transaction_conn.begin()
+        await connection.begin()
     
-    async def _commitTransaction(self) -> None:
+    async def commitTransaction(self, connection: Any) -> None:
         """Commit the current transaction."""
-        if self._transaction_conn:
-            await self._transaction_conn.commit()
-            self._pool.release(self._transaction_conn)
-            self._transaction_conn = None
+        await connection.commit()
     
-    async def _rollbackTransaction(self) -> None:
+    async def rollbackTransaction(self, connection: Any) -> None:
         """Rollback the current transaction."""
-        if self._transaction_conn:
-            await self._transaction_conn.rollback()
-            self._pool.release(self._transaction_conn)
-            self._transaction_conn = None
+        await connection.rollback()
     
     async def executeRaw(
         self,

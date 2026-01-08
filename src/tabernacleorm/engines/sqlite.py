@@ -23,7 +23,7 @@ class SQLiteEngine(BaseEngine):
     def __init__(self, config):
         super().__init__(config)
         self._executor = ThreadPoolExecutor(max_workers=1)
-        self._in_transaction = False
+        self._connection = None
     
     async def connect(self) -> None:
         """Establish connection to SQLite database."""
@@ -38,7 +38,7 @@ class SQLiteEngine(BaseEngine):
         def _connect():
             conn = sqlite3.connect(
                 url,
-                check_same_thread=self.config.check_same_thread,
+                check_same_thread=False, # Allow passing connection between threads
                 timeout=self.config.timeout
             )
             conn.row_factory = sqlite3.Row
@@ -66,12 +66,19 @@ class SQLiteEngine(BaseEngine):
             self._connection = None
             self._connected = False
             self._executor.shutdown(wait=False)
+
+    async def acquireConnection(self) -> Any:
+        return self._connection
+
+    async def releaseConnection(self, connection: Any) -> None:
+        pass # Single connection mode
     
     async def _execute(
         self,
         sql: str,
         params: Optional[Tuple] = None,
-        fetch: bool = True
+        fetch: bool = True,
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """Execute SQL query."""
         if self.config.echo:
@@ -79,8 +86,10 @@ class SQLiteEngine(BaseEngine):
             if params:
                 print(f"[SQLite] Params: {params}")
         
+        conn = _connection or self._connection
+
         def _run():
-            cursor = self._connection.cursor()
+            cursor = conn.cursor()
             try:
                 if params:
                     cursor.execute(sql, params)
@@ -91,8 +100,12 @@ class SQLiteEngine(BaseEngine):
                     rows = cursor.fetchall()
                     return [dict(row) for row in rows]
                 else:
-                    if not self._in_transaction:
-                        self._connection.commit()
+                    # Auto-commit if not in a transaction (detected via in_transaction status of conn?)
+                    # SQLite python module handles transactions automatically mostly.
+                    # We rely on manual BEGIN/COMMIT for sessions.
+                    # If this is a single op (no session), we should commit.
+                    if not _connection: 
+                        conn.commit()
                     return []
             except sqlite3.OperationalError as e:
                 msg = str(e)
@@ -112,7 +125,8 @@ class SQLiteEngine(BaseEngine):
     async def insertOne(
         self,
         collection: str,
-        document: Dict[str, Any]
+        document: Dict[str, Any],
+        _connection: Any = None
     ) -> Any:
         """Insert a single document."""
         fields = []
@@ -127,17 +141,18 @@ class SQLiteEngine(BaseEngine):
             values.append(self._serializeValue(value))
         
         sql = f"INSERT INTO {collection} ({', '.join(fields)}) VALUES ({', '.join(placeholders)})"
-        await self._execute(sql, tuple(values), fetch=False)
+        await self._execute(sql, tuple(values), fetch=False, _connection=_connection)
         
         # Get last inserted ID
-        result = await self._execute("SELECT last_insert_rowid() as id")
+        result = await self._execute("SELECT last_insert_rowid() as id", _connection=_connection)
         return result[0]["id"] if result else None
     
     async def insertMany(
         self,
         collection: str,
         documents: List[Dict[str, Any]],
-        batch_size: int = 100
+        batch_size: int = 100,
+        _connection: Any = None
     ) -> List[Any]:
         """Insert multiple documents in batches."""
         ids = []
@@ -145,7 +160,7 @@ class SQLiteEngine(BaseEngine):
         for i in range(0, len(documents), batch_size):
             batch = documents[i:i + batch_size]
             for doc in batch:
-                doc_id = await self.insertOne(collection, doc)
+                doc_id = await self.insertOne(collection, doc, _connection=_connection)
                 ids.append(doc_id)
         
         return ids
@@ -154,11 +169,12 @@ class SQLiteEngine(BaseEngine):
         self,
         collection: str,
         query: Dict[str, Any],
-        projection: Optional[List[str]] = None
+        projection: Optional[List[str]] = None,
+        _connection: Any = None
     ) -> Optional[Dict[str, Any]]:
         """Find a single document."""
         results = await self.findMany(
-            collection, query, projection=projection, limit=1
+            collection, query, projection=projection, limit=1, _connection=_connection
         )
         return results[0] if results else None
     
@@ -169,7 +185,8 @@ class SQLiteEngine(BaseEngine):
         projection: Optional[List[str]] = None,
         sort: Optional[List[Tuple[str, int]]] = None,
         skip: int = 0,
-        limit: int = 0
+        limit: int = 0,
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """Find multiple documents."""
         # Build SELECT clause
@@ -201,7 +218,7 @@ class SQLiteEngine(BaseEngine):
         if skip > 0:
             sql += f" OFFSET {skip}"
         
-        results = await self._execute(sql, tuple(params) if params else None)
+        results = await self._execute(sql, tuple(params) if params else None, _connection=_connection)
         return [self._deserializeRow(row) for row in results]
     
     async def updateOne(
@@ -209,7 +226,8 @@ class SQLiteEngine(BaseEngine):
         collection: str,
         query: Dict[str, Any],
         update: Dict[str, Any],
-        upsert: bool = False
+        upsert: bool = False,
+        _connection: Any = None
     ) -> int:
         """Update a single document."""
         # Handle $set operator
@@ -219,11 +237,11 @@ class SQLiteEngine(BaseEngine):
             update_data = update
         
         # Find the document first to get its ID
-        doc = await self.findOne(collection, query, projection=["id"])
+        doc = await self.findOne(collection, query, projection=["id"], _connection=_connection)
         
         if not doc and upsert:
             # Insert new document
-            await self.insertOne(collection, {**query, **update_data})
+            await self.insertOne(collection, {**query, **update_data}, _connection=_connection)
             return 1
         elif not doc:
             return 0
@@ -238,14 +256,15 @@ class SQLiteEngine(BaseEngine):
         values.append(doc["id"])
         sql = f"UPDATE {collection} SET {', '.join(set_parts)} WHERE id = ?"
         
-        await self._execute(sql, tuple(values), fetch=False)
+        await self._execute(sql, tuple(values), fetch=False, _connection=_connection)
         return 1
     
     async def updateMany(
         self,
         collection: str,
         query: Dict[str, Any],
-        update: Dict[str, Any]
+        update: Dict[str, Any],
+        _connection: Any = None
     ) -> int:
         """Update multiple documents."""
         # Handle $set operator
@@ -270,30 +289,32 @@ class SQLiteEngine(BaseEngine):
                 sql += f" WHERE {conditions}"
                 values.extend(cond_params)
         
-        await self._execute(sql, tuple(values), fetch=False)
+        await self._execute(sql, tuple(values), fetch=False, _connection=_connection)
         
         # Get affected rows count
-        result = await self._execute("SELECT changes() as count")
+        result = await self._execute("SELECT changes() as count", _connection=_connection)
         return result[0]["count"] if result else 0
     
     async def deleteOne(
         self,
         collection: str,
-        query: Dict[str, Any]
+        query: Dict[str, Any],
+        _connection: Any = None
     ) -> int:
         """Delete a single document."""
-        doc = await self.findOne(collection, query, projection=["id"])
+        doc = await self.findOne(collection, query, projection=["id"], _connection=_connection)
         if not doc:
             return 0
         
         sql = f"DELETE FROM {collection} WHERE id = ?"
-        await self._execute(sql, (doc["id"],), fetch=False)
+        await self._execute(sql, (doc["id"],), fetch=False, _connection=_connection)
         return 1
     
     async def deleteMany(
         self,
         collection: str,
-        query: Dict[str, Any]
+        query: Dict[str, Any],
+        _connection: Any = None
     ) -> int:
         """Delete multiple documents."""
         sql = f"DELETE FROM {collection}"
@@ -305,15 +326,16 @@ class SQLiteEngine(BaseEngine):
                 sql += f" WHERE {conditions}"
                 params.extend(cond_params)
         
-        await self._execute(sql, tuple(params) if params else None, fetch=False)
+        await self._execute(sql, tuple(params) if params else None, fetch=False, _connection=_connection)
         
-        result = await self._execute("SELECT changes() as count")
+        result = await self._execute("SELECT changes() as count", _connection=_connection)
         return result[0]["count"] if result else 0
     
     async def count(
         self,
         collection: str,
-        query: Dict[str, Any]
+        query: Dict[str, Any],
+        _connection: Any = None
     ) -> int:
         """Count documents matching query."""
         sql = f"SELECT COUNT(*) as count FROM {collection}"
@@ -325,13 +347,14 @@ class SQLiteEngine(BaseEngine):
                 sql += f" WHERE {conditions}"
                 params.extend(cond_params)
         
-        result = await self._execute(sql, tuple(params) if params else None)
+        result = await self._execute(sql, tuple(params) if params else None, _connection=_connection)
         return result[0]["count"] if result else 0
     
     async def aggregate(
         self,
         collection: str,
-        pipeline: List[Dict[str, Any]]
+        pipeline: List[Dict[str, Any]],
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """Execute aggregation pipeline (translated to SQL)."""
         # Basic aggregation translation
@@ -400,7 +423,7 @@ class SQLiteEngine(BaseEngine):
                 sql_parts.append(f"GROUP BY {group_by}")
         
         sql = " ".join(sql_parts)
-        return await self._execute(sql, tuple(params) if params else None)
+        return await self._execute(sql, tuple(params) if params else None, _connection=_connection)
     
     async def createCollection(
         self,
@@ -454,20 +477,19 @@ class SQLiteEngine(BaseEngine):
         sql = f"DROP INDEX IF EXISTS {name}"
         await self._execute(sql, fetch=False)
     
-    async def _beginTransaction(self) -> None:
+    async def beginTransaction(self, connection: Any) -> None:
         """Begin a transaction."""
-        self._in_transaction = True
-        await self._execute("BEGIN TRANSACTION", fetch=False)
+        # SQLite transaction is usually implicit or connection-level
+        # We can force it via BEGIN
+        await self._execute("BEGIN TRANSACTION", fetch=False, _connection=connection)
     
-    async def _commitTransaction(self) -> None:
+    async def commitTransaction(self, connection: Any) -> None:
         """Commit the current transaction."""
-        await self._execute("COMMIT", fetch=False)
-        self._in_transaction = False
+        await self._execute("COMMIT", fetch=False, _connection=connection)
     
-    async def _rollbackTransaction(self) -> None:
+    async def rollbackTransaction(self, connection: Any) -> None:
         """Rollback the current transaction."""
-        await self._execute("ROLLBACK", fetch=False)
-        self._in_transaction = False
+        await self._execute("ROLLBACK", fetch=False, _connection=connection)
     
     async def executeRaw(
         self,

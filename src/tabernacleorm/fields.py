@@ -1,250 +1,161 @@
 """
 Field definitions for TabernacleORM models.
+Now fully compatible with Pydantic.
 """
 
-from typing import Any, Optional, Type
+from typing import Any, Optional, Type, TYPE_CHECKING
 from datetime import datetime, date
+from pydantic import Field as PydanticField
+from pydantic.fields import FieldInfo
 
+class RelationshipInfo:
+    """Metadata for relationships."""
+    def __init__(self, back_populates: Optional[str] = None, link_model: Any = None):
+        self.back_populates = back_populates
+        self.link_model = link_model
 
-class Field:
-    """Base field class for all field types."""
+def Field(
+    default: Any = ...,
+    *,
+    primary_key: bool = False,
+    nullable: bool = True,
+    unique: bool = False,
+    index: bool = False,
+    max_length: Optional[int] = None,
+    auto_increment: bool = False,
+    auto_now: bool = False,
+    auto_now_add: bool = False,
+    foreign_key: Optional[str] = None,
+    on_delete: str = "CASCADE",
+    sa_type: Any = None, # SQLAlchemy type hint if needed later
+    **kwargs
+) -> Any:
+    """
+    Define a model field with ORM metadata.
+    """
+    json_schema_extra = kwargs.pop("json_schema_extra", {})
+    json_schema_extra.update({
+        "tabernacle_args": {
+            "primary_key": primary_key,
+            "nullable": nullable,
+            "unique": unique,
+            "index": index,
+            "max_length": max_length,
+            "auto_increment": auto_increment,
+            "auto_now": auto_now,
+            "auto_now_add": auto_now_add,
+            "foreign_key": foreign_key,
+            "on_delete": on_delete,
+            "sa_type": sa_type
+        }
+    })
     
-    def __init__(
-        self,
-        primary_key: bool = False,
-        nullable: bool = True,
-        default: Any = None,
-        unique: bool = False,
-        index: bool = False,
+    return PydanticField(default, json_schema_extra=json_schema_extra, **kwargs)
+
+def Relationship(
+    back_populates: Optional[str] = None,
+    link_model: Any = None,
+    **kwargs
+) -> Any:
+    """
+    Define a relationship to another model.
+    """
+    json_schema_extra = kwargs.pop("json_schema_extra", {})
+    json_schema_extra.update({
+        "relationship": RelationshipInfo(back_populates, link_model)
+    })
+    # Relationships are typically excluded from direct DB serialization
+    return PydanticField(default=None, exclude=True, json_schema_extra=json_schema_extra, **kwargs)
+
+
+# ----- Helpers / Aliases for backward compatibility & expressiveness -----
+
+def IntegerField(
+    primary_key: bool = False,
+    auto_increment: bool = False,
+    default: Any = ...,
+    **kwargs
+) -> Any:
+    return Field(
+        default=default,
+        primary_key=primary_key,
+        auto_increment=auto_increment,
+        sa_type="INTEGER",
         **kwargs
-    ):
-        if kwargs.get("required"):
-            nullable = False
+    )
 
-        self.primary_key = primary_key
-        self.nullable = nullable
-        self.default = default
-        self.unique = unique
-        self.index = index
-        self.name: Optional[str] = None
-        self.model: Optional[Type] = None
-    
-    def __set_name__(self, owner: Type, name: str) -> None:
-        self.name = name
-        self.model = owner
-    
-    def __get__(self, obj: Any, objtype: Optional[Type] = None) -> Any:
-        if obj is None:
-            return self
-        return obj.__dict__.get(self.name, self.default)
-    
-    def __set__(self, obj: Any, value: Any) -> None:
-        obj.__dict__[self.name] = self.validate(value)
-    
-    def validate(self, value: Any) -> Any:
-        """Validate and convert the value. Override in subclasses."""
-        if value is None and not self.nullable:
-            raise ValueError(f"Field '{self.name}' cannot be null")
-        return value
-    
-    def get_sql_type(self) -> str:
-        """Return the SQL type for this field. Override in subclasses."""
-        raise NotImplementedError("Subclasses must implement get_sql_type()")
-    
-    def get_column_definition(self) -> str:
-        """Generate the SQL column definition."""
-        parts = [self.name, self.get_sql_type()]
-        
-        if self.primary_key:
-            parts.append("PRIMARY KEY")
-        if not self.nullable:
-            parts.append("NOT NULL")
-        if self.unique and not self.primary_key:
-            parts.append("UNIQUE")
-        if self.default is not None:
-            parts.append(f"DEFAULT {self._format_default()}")
-        
-        return " ".join(parts)
-    
-    def _format_default(self) -> str:
-        """Format the default value for SQL."""
-        if isinstance(self.default, str):
-            return f"'{self.default}'"
-        elif isinstance(self.default, bool):
-            return "1" if self.default else "0"
-        return str(self.default)
+def StringField(
+    max_length: int = 255,
+    default: Any = ...,
+    **kwargs
+) -> Any:
+    return Field(
+        default=default,
+        max_length=max_length,
+        sa_type="VARCHAR",
+        **kwargs
+    )
 
+def TextField(default: Any = ..., **kwargs) -> Any:
+    return Field(default=default, sa_type="TEXT", **kwargs)
 
-class IntegerField(Field):
-    """Integer field type."""
-    
-    def __init__(self, auto_increment: bool = False, **kwargs):
-        super().__init__(**kwargs)
-        self.auto_increment = auto_increment
-    
-    def validate(self, value: Any) -> Optional[int]:
-        value = super().validate(value)
-        if value is None:
-            return None
-        if not isinstance(value, int):
-            try:
-                return int(value)
-            except (ValueError, TypeError):
-                raise ValueError(f"Field '{self.name}' must be an integer")
-        return value
-    
-    def get_sql_type(self) -> str:
-        if self.auto_increment:
-            return "INTEGER AUTOINCREMENT" if self.primary_key else "INTEGER"
-        return "INTEGER"
-    
-    def get_column_definition(self) -> str:
-        if self.primary_key and self.auto_increment:
-            return f"{self.name} INTEGER PRIMARY KEY AUTOINCREMENT"
-        return super().get_column_definition()
+def BooleanField(default: bool = False, **kwargs) -> Any:
+    return Field(default=default, sa_type="BOOLEAN", **kwargs)
 
+def FloatField(default: Any = ..., **kwargs) -> Any:
+    return Field(default=default, sa_type="REAL", **kwargs)
 
-class StringField(Field):
-    """String field type with max length."""
-    
-    def __init__(self, max_length: int = 255, **kwargs):
-        super().__init__(**kwargs)
-        self.max_length = max_length
-    
-    def validate(self, value: Any) -> Optional[str]:
-        value = super().validate(value)
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            value = str(value)
-        if len(value) > self.max_length:
-            raise ValueError(
-                f"Field '{self.name}' exceeds max length of {self.max_length}"
-            )
-        return value
-    
-    def get_sql_type(self) -> str:
-        return f"VARCHAR({self.max_length})"
+def DateTimeField(
+    auto_now: bool = False,
+    auto_now_add: bool = False,
+    default: Any = ...,
+    **kwargs
+) -> Any:
+    return Field(
+        default=default,
+        auto_now=auto_now,
+        auto_now_add=auto_now_add,
+        sa_type="DATETIME",
+        **kwargs
+    )
 
+def DateField(default: Any = ..., **kwargs) -> Any:
+    return Field(default=default, sa_type="DATE", **kwargs)
 
-class TextField(Field):
-    """Text field for longer strings without length limit."""
-    
-    def validate(self, value: Any) -> Optional[str]:
-        value = super().validate(value)
-        if value is None:
-            return None
-        return str(value)
-    
-    def get_sql_type(self) -> str:
-        return "TEXT"
+def ForeignKey(
+    to: str,
+    on_delete: str = "CASCADE",
+    **kwargs
+) -> Any:
+    """
+    Foreign Key field.
+    'to' should be 'TableName.field' or just 'TableName' (defaults to id).
+    """
+    return Field(
+        foreign_key=to,
+        on_delete=on_delete,
+        sa_type="INTEGER", # Assuming integer FKs for now
+        **kwargs
+    )
 
+def UUIDField(default: Any = ..., **kwargs) -> Any:
+    return Field(default=default, sa_type="UUID", **kwargs)
 
-class FloatField(Field):
-    """Float/decimal field type."""
-    
-    def validate(self, value: Any) -> Optional[float]:
-        value = super().validate(value)
-        if value is None:
-            return None
-        if not isinstance(value, (int, float)):
-            try:
-                return float(value)
-            except (ValueError, TypeError):
-                raise ValueError(f"Field '{self.name}' must be a number")
-        return float(value)
-    
-    def get_sql_type(self) -> str:
-        return "REAL"
+def JSONField(default: Any = ..., **kwargs) -> Any:
+    return Field(default=default, sa_type="JSON", **kwargs)
 
+def ArrayField(default: Any = ..., **kwargs) -> Any:
+    return Field(default=default, sa_type="ARRAY", **kwargs)
 
-class BooleanField(Field):
-    """Boolean field type."""
-    
-    def __init__(self, default: bool = False, **kwargs):
-        super().__init__(default=default, **kwargs)
-    
-    def validate(self, value: Any) -> Optional[bool]:
-        value = super().validate(value)
-        if value is None:
-            return None
-        return bool(value)
-    
-    def get_sql_type(self) -> str:
-        return "BOOLEAN"
+def EmbeddedField(model_class: Any, **kwargs) -> Any:
+    """Field for embedded NoSQL documents."""
+    return Field(sa_type="JSON", **kwargs) 
 
+# Relationships
+def OneToMany(to: str, back_populates: Optional[str] = None, **kwargs) -> Any:
+    """One-to-Many relationship (virtual)."""
+    return Relationship(back_populates=back_populates, link_model=to, **kwargs)
 
-class DateTimeField(Field):
-    """DateTime field type."""
-    
-    def __init__(self, auto_now: bool = False, auto_now_add: bool = False, **kwargs):
-        super().__init__(**kwargs)
-        self.auto_now = auto_now
-        self.auto_now_add = auto_now_add
-    
-    def validate(self, value: Any) -> Optional[datetime]:
-        value = super().validate(value)
-        if value is None:
-            return None
-        if isinstance(value, datetime):
-            return value
-        if isinstance(value, str):
-            try:
-                return datetime.fromisoformat(value)
-            except ValueError:
-                raise ValueError(
-                    f"Field '{self.name}' must be a valid datetime string"
-                )
-        raise ValueError(f"Field '{self.name}' must be a datetime")
-    
-    def get_sql_type(self) -> str:
-        return "DATETIME"
-
-
-class DateField(Field):
-    """Date field type."""
-    
-    def validate(self, value: Any) -> Optional[date]:
-        value = super().validate(value)
-        if value is None:
-            return None
-        if isinstance(value, datetime):
-            return value.date()
-        if isinstance(value, date):
-            return value
-        if isinstance(value, str):
-            try:
-                return date.fromisoformat(value)
-            except ValueError:
-                raise ValueError(f"Field '{self.name}' must be a valid date string")
-        raise ValueError(f"Field '{self.name}' must be a date")
-    
-    def get_sql_type(self) -> str:
-        return "DATE"
-
-
-class ForeignKey(Field):
-    """Foreign key field for relationships."""
-    
-    def __init__(self, to: str, on_delete: str = "CASCADE", **kwargs):
-        super().__init__(**kwargs)
-        self.to = to
-        self.on_delete = on_delete
-    
-    def validate(self, value: Any) -> Optional[int]:
-        value = super().validate(value)
-        if value is None:
-            return None
-        if not isinstance(value, int):
-            try:
-                return int(value)
-            except (ValueError, TypeError):
-                raise ValueError(f"Field '{self.name}' must be an integer (foreign key)")
-        return value
-    
-    def get_sql_type(self) -> str:
-        return "INTEGER"
-    
-    def get_column_definition(self) -> str:
-        base = super().get_column_definition()
-        return f"{base} REFERENCES {self.to}(id) ON DELETE {self.on_delete}"
+def ManyToMany(to: str, **kwargs) -> Any:
+    """Many-to-Many relationship (virtual)."""
+    return Relationship(link_model=to, **kwargs)

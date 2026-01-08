@@ -20,7 +20,6 @@ class MongoDBEngine(BaseEngine):
         super().__init__(config)
         self._client = None
         self._db = None
-        self._session = None
     
     async def connect(self) -> None:
         """Establish connection to MongoDB."""
@@ -69,26 +68,34 @@ class MongoDBEngine(BaseEngine):
             self._client = None
             self._db = None
             self._connected = False
+
+    async def acquireConnection(self) -> Any:
+        return await self._client.start_session()
+
+    async def releaseConnection(self, connection: Any) -> None:
+        connection.end_session()
     
 
     async def insertOne(
         self,
         collection: str,
-        document: Dict[str, Any]
+        document: Dict[str, Any],
+        _connection: Any = None
     ) -> Any:
         """Insert a single document."""
         # Convert ID if present
         if "id" in document:
             document["_id"] = document.pop("id")
         
-        result = await self._db[collection].insert_one(document)
+        result = await self._db[collection].insert_one(document, session=_connection)
         return str(result.inserted_id)
     
     async def insertMany(
         self,
         collection: str,
         documents: List[Dict[str, Any]],
-        batch_size: int = 100
+        batch_size: int = 100,
+        _connection: Any = None
     ) -> List[Any]:
         """Insert multiple documents."""
         # Handle id to _id conversion
@@ -98,20 +105,21 @@ class MongoDBEngine(BaseEngine):
             elif "id" in doc:
                 del doc["id"]
         
-        result = await self._db[collection].insert_many(documents, ordered=False)
+        result = await self._db[collection].insert_many(documents, ordered=False, session=_connection)
         return [str(id) for id in result.inserted_ids]
     
     async def findOne(
         self,
         collection: str,
         query: Dict[str, Any],
-        projection: Optional[List[str]] = None
+        projection: Optional[List[str]] = None,
+        _connection: Any = None
     ) -> Optional[Dict[str, Any]]:
         """Find a single document."""
         query = self._normalize_query(query)
         proj = {f: 1 for f in projection} if projection else None
         
-        doc = await self._db[collection].find_one(query, projection=proj)
+        doc = await self._db[collection].find_one(query, projection=proj, session=_connection)
         return self._normalize_document(doc) if doc else None
     
     async def findMany(
@@ -121,13 +129,14 @@ class MongoDBEngine(BaseEngine):
         projection: Optional[List[str]] = None,
         sort: Optional[List[Tuple[str, int]]] = None,
         skip: int = 0,
-        limit: int = 0
+        limit: int = 0,
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """Find multiple documents."""
         query = self._normalize_query(query)
         proj = {f: 1 for f in projection} if projection else None
         
-        cursor = self._db[collection].find(query, projection=proj)
+        cursor = self._db[collection].find(query, projection=proj, session=_connection)
         
         if sort:
             cursor = cursor.sort(sort)
@@ -144,7 +153,8 @@ class MongoDBEngine(BaseEngine):
         collection: str,
         query: Dict[str, Any],
         update: Dict[str, Any],
-        upsert: bool = False
+        upsert: bool = False,
+        _connection: Any = None
     ) -> int:
         """Update a single document."""
         query = self._normalize_query(query)
@@ -153,14 +163,15 @@ class MongoDBEngine(BaseEngine):
         if not any(k.startswith("$") for k in update.keys()):
             update = {"$set": update}
         
-        result = await self._db[collection].update_one(query, update, upsert=upsert)
+        result = await self._db[collection].update_one(query, update, upsert=upsert, session=_connection)
         return result.modified_count
     
     async def updateMany(
         self,
         collection: str,
         query: Dict[str, Any],
-        update: Dict[str, Any]
+        update: Dict[str, Any],
+        _connection: Any = None
     ) -> int:
         """Update multiple documents."""
         query = self._normalize_query(query)
@@ -168,30 +179,31 @@ class MongoDBEngine(BaseEngine):
         if not any(k.startswith("$") for k in update.keys()):
             update = {"$set": update}
         
-        result = await self._db[collection].update_many(query, update)
+        result = await self._db[collection].update_many(query, update, session=_connection)
         return result.modified_count
     
-    async def deleteOne(self, collection: str, query: Dict[str, Any]) -> int:
+    async def deleteOne(self, collection: str, query: Dict[str, Any], _connection: Any = None) -> int:
         """Delete a single document."""
         query = self._normalize_query(query)
-        result = await self._db[collection].delete_one(query)
+        result = await self._db[collection].delete_one(query, session=_connection)
         return result.deleted_count
     
-    async def deleteMany(self, collection: str, query: Dict[str, Any]) -> int:
+    async def deleteMany(self, collection: str, query: Dict[str, Any], _connection: Any = None) -> int:
         """Delete multiple documents."""
         query = self._normalize_query(query)
-        result = await self._db[collection].delete_many(query)
+        result = await self._db[collection].delete_many(query, session=_connection)
         return result.deleted_count
     
-    async def count(self, collection: str, query: Dict[str, Any]) -> int:
+    async def count(self, collection: str, query: Dict[str, Any], _connection: Any = None) -> int:
         """Count documents matching query."""
         query = self._normalize_query(query)
-        return await self._db[collection].count_documents(query)
+        return await self._db[collection].count_documents(query, session=_connection)
     
     async def aggregate(
         self,
         collection: str,
-        pipeline: List[Dict[str, Any]]
+        pipeline: List[Dict[str, Any]],
+        _connection: Any = None
     ) -> List[Dict[str, Any]]:
         """Execute aggregation pipeline."""
         # Normalize id references in pipeline
@@ -212,7 +224,7 @@ class MongoDBEngine(BaseEngine):
                     normalized_stage[key] = value
             normalized_pipeline.append(normalized_stage)
         
-        cursor = self._db[collection].aggregate(normalized_pipeline)
+        cursor = self._db[collection].aggregate(normalized_pipeline, session=_connection)
         docs = await cursor.to_list(length=None)
         return [self._normalize_document(doc) for doc in docs]
     
@@ -268,24 +280,20 @@ class MongoDBEngine(BaseEngine):
         """Drop an index."""
         await self._db[collection].drop_index(name)
     
-    async def _beginTransaction(self) -> None:
+    async def beginTransaction(self, connection: Any) -> None:
         """Begin a transaction."""
-        self._session = await self._client.start_session()
-        self._session.start_transaction()
+        connection.start_transaction()
     
-    async def _commitTransaction(self) -> None:
+    async def commitTransaction(self, connection: Any) -> None:
         """Commit the current transaction."""
-        if self._session:
-            await self._session.commit_transaction()
-            await self._session.end_session()
-            self._session = None
+        await connection.commit_transaction()
+        connection.end_session() # Transaction implies session life cycle here or in releaseConnection?
+        # Connection is released in finally block of context manager, which calls end_session.
     
-    async def _rollbackTransaction(self) -> None:
+    async def rollbackTransaction(self, connection: Any) -> None:
         """Rollback the current transaction."""
-        if self._session:
-            await self._session.abort_transaction()
-            await self._session.end_session()
-            self._session = None
+        await connection.abort_transaction()
+        # end_session called in releaseConnection
     
     async def executeRaw(
         self,

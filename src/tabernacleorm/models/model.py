@@ -1,340 +1,289 @@
 """
 Base Model class for TabernacleORM.
+Fully async, Pydantic-based, with support for advanced ORM features.
 """
 
-import asyncio
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
-
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union, ClassVar, Coroutine, Tuple
+from datetime import datetime
+from pydantic import BaseModel, Field as PydanticField
+from pydantic.fields import FieldInfo
+from pydantic._internal._model_construction import ModelMetaclass as PydanticMetaclass
+from ..fields import Field, Relationship, RelationshipInfo
+from ..query.queryset import QuerySet
 from ..core.connection import get_connection
-from ..fields.base import Field
-from .meta import ModelMeta
-from .hooks import HookMixin
 
+T = TypeVar("T", bound="Model")
 
-class Model(HookMixin, metaclass=ModelMeta):
-    """
-    Base class for all models.
-    
-    Provides CRUD operations, validation, and hook integration.
-    """
-    
-    # Config options (override in subclasses)
-    __collection__: str
-    __engine__: Optional[str] = None  # Force specific engine
-    
-    def __init__(self, **kwargs):
-        self._modified_fields = set()
-        self._is_new = True
+class ColumnExpression:
+    """Represents a column in a query expression."""
+    def __init__(self, name: str):
+        self.name = name
+
+    def __eq__(self, other): return ("$eq", self.name, other)
+    def __ne__(self, other): return ("$ne", self.name, other)
+    def __gt__(self, other): return ("$gt", self.name, other)
+    def __ge__(self, other): return ("$gte", self.name, other)
+    def __lt__(self, other): return ("$lt", self.name, other)
+    def __le__(self, other): return ("$lte", self.name, other)
+    def in_(self, other): return ("$in", self.name, other)
+    def like(self, other): return ("$like", self.name, other)
+
+class ModelMetaclass(PydanticMetaclass):
+    """Metaclass to handle ORM metadata and Query Expressions."""
+    def __init__(cls, name, bases, namespace):
+        super().__init__(name, bases, namespace)
         
-        # Initialize fields with defaults
-        for name, field in self._fields.items():
-            if name in kwargs:
-                setattr(self, name, kwargs[name])
-            else:
-                # Set default directly to avoid marking as modified
-                # Store in __dict__ so descriptors can find it
-                default = field.get_default()
-                self.__dict__[name] = default
-        
-        # Handle implicit Primary Key if provided (e.g. from DB for implicit 'id')
-        # If 'id' is not in _fields, the loop above missed it.
-        pk = self._primary_key
-        if pk not in self._fields and pk in kwargs:
-            setattr(self, pk, kwargs[pk])
-    
-    def __repr__(self) -> str:
-        try:
-            return f"<{self.__class__.__name__}: {self.id}>"
-        except Exception:
-            return f"<{self.__class__.__name__}>"
+        # Register Model globally
+        from ..core.registry import register_model
+        register_model(name, cls)
 
-    
-    @property
-    def is_new(self) -> bool:
-        """True if document has not been saved yet."""
-        return self._is_new
-    
-    @property
-    def id(self) -> Any:
-        """Get ID (alias for primary key)."""
-        pk_field = self._primary_key
-        if pk_field == "id":
-            return self.__dict__.get("id")
-        return getattr(self, pk_field)
-    
-    @id.setter
-    def id(self, value: Any):
-        """Set ID."""
-        pk_field = self._primary_key
-        if pk_field == "id":
-            self.__dict__["id"] = value
-        else:
-            setattr(self, pk_field, value)
-    
-    def is_modified(self, field: str) -> bool:
-        """Check if a field has been modified."""
-        return field in self._modified_fields
-    
-    def get_changes(self) -> Dict[str, Any]:
-        """Get dictionary of modified fields and their new values."""
-        return {
-            field: getattr(self, field)
-            for field in self._modified_fields
+        # Build _tabernacle_meta from Pydantic fields
+        cls._tabernacle_meta = {
+            "table_name": cls.__name__.lower() + "s",  # customized via Config if needed
+            "primary_key": None,
+            "columns": {},
+            "relationships": {}
         }
-    
-    def to_dict(self, exclude: Optional[List[str]] = None) -> Dict[str, Any]:
-        """Convert model to dictionary."""
-        data = {}
-        exclude = exclude or []
-        for name, field in self._fields.items():
-            if name in exclude:
+        
+        # Check explicit Config for table name override (Pydantic V2 uses class Config or model_config)
+        # We look for a nested Config class standard in standard ORMs or Pydantic V1 compat
+        if hasattr(cls, "Config") and hasattr(cls.Config, "table_name"):
+            cls._tabernacle_meta["table_name"] = cls.Config.table_name
+
+        for parser_field_name, field_info in cls.model_fields.items():
+            extra = field_info.json_schema_extra or {}
+            
+            # Handle Relationships
+            if "relationship" in extra:
+                rel_info = extra["relationship"]
+                cls._tabernacle_meta["relationships"][parser_field_name] = rel_info
                 continue
-            value = getattr(self, name)
-            # Basic serialization logic available in field.to_db usually handles this,
-            # but to_dict might want a python-native dict.
-            # For now return as-is or serialized? Usually to_dict returns serializable data.
-            data[name] = field.to_db(value)
-        return data
-    
-    @classmethod
-    def find(cls, query: Optional[Dict[str, Any]] = None) -> "QuerySet":
-        """
-        Start a query.
-        
-        Args:
-            query: Optional filter conditions
             
-        Returns:
-            QuerySet instance
-        """
-        from ..query.queryset import QuerySet
-        qs = QuerySet(cls)
-        if query:
-            qs = qs.filter(query)
-        return qs
-    
-    @classmethod
-    async def findOne(cls, query: Dict[str, Any]) -> Optional["Model"]:
-        """Find a single document."""
-        return await cls.find(query).first()
-    
-    @classmethod
-    async def findById(cls, id: Any) -> Optional["Model"]:
-        """Find a document by ID."""
-        return await cls.find({"id": id}).first()
-    
-    @classmethod
-    async def findMany(cls, query: Optional[Dict[str, Any]] = None) -> List["Model"]:
-        """Find multiple documents."""
-        return await cls.find(query).exec()
-    
-    @classmethod
-    async def create(cls, **kwargs) -> "Model":
-        """Create and save a new document."""
-        instance = cls(**kwargs)
-        await instance.save()
-        return instance
-    
-    async def save(self) -> None:
-        """Save the document (insert or update)."""
-        # Run pre-validation hooks
-        await self._run_hooks("pre_validate")
-        
-        # Validate all fields
-        self.validate()
-        
-        # Run post-validation hooks
-        await self._run_hooks("post_validate")
-        
-        # Run pre-save hooks
-        await self._run_hooks("pre_save")
-        
-        db = self._get_db()
-        collection = self.__collection__
-        
-        data = self._to_db_data()
-        
-        if self._is_new:
-            # Insert
-            await self._run_hooks("pre_insert")
+            # Handle Columns
+            # If explicit Field() was used with our wrapper, 'tabernacle_args' exists.
+            # If simple type hint was used, we assume standard column.
+            tab_args = extra.get("tabernacle_args", {})
+            cls._tabernacle_meta["columns"][parser_field_name] = tab_args
             
-            # If ID is set, allow it (for custom UUIDs/IDs)
-            # If not, let DB handle it (auto-increment/ObjectId)
+            if tab_args.get("primary_key"):
+                cls._tabernacle_meta["primary_key"] = parser_field_name
             
-            new_id = await db.insertOne(collection, data)
-            
-            if new_id is not None:
-                # Update ID on instance
-                # We need to handle engine-specific ID normalization
-                 # denormalizeId expects ID from DB and potentially converts it
-                 # For example ObjectId -> str
-                 normalized_id = db.denormalizeId(new_id)
-                 setattr(self, "id", normalized_id)
-            
-            self._is_new = False
-            self._modified_fields.clear()
-            
-            await self._run_hooks("post_insert")
-        else:
-            # Update
-            await self._run_hooks("pre_update")
-            
-            # Only update modified fields
-            if self._modified_fields:
-                update_data = {
-                    k: data[k] for k in self._modified_fields
-                    if k != "id"  # Never update ID
-                }
-                
-                if update_data:
-                    query = {"id": self.id}
-                    await db.updateOne(collection, query, {"$set": update_data})
-            
-            self._modified_fields.clear()
-            
-            await self._run_hooks("post_update")
-            
-        await self._run_hooks("post_save")
-    
-    async def delete(self) -> None:
-        """Delete the document."""
-        if self._is_new:
-            return
-            
-        await self._run_hooks("pre_delete")
-        
-        db = self._get_db()
-        await db.deleteOne(self.__collection__, {"id": self.id})
-        
-        await self._run_hooks("post_delete")
-        self._is_new = True  # Mark as new if deleted (so it could be re-saved as new)
-    
-    def validate(self) -> None:
-        """Validate all fields."""
-        for name, field in self._fields.items():
-            value = getattr(self, name)
-            field.validate(value)
-    
-    def _to_db_data(self) -> Dict[str, Any]:
-        """Convert fields to DB storage format."""
-        data = {}
-        for name, field in self._fields.items():
-            value = getattr(self, name)
-            data[name] = field.to_db(value)
-        return data
-    
-    @classmethod
-    async def insertMany(
-        cls,
-        documents: List[Union["Model", Dict[str, Any]]],
-        batch_size: int = 100
-    ) -> List[Any]:
-        """Insert multiple documents."""
-        # TODO: Handle Model instances vs dicts
-        # For now assume dicts or Model instances that need serialization
-        raw_docs = []
-        for doc in documents:
-            if isinstance(doc, Model):
-                doc.validate()
-                raw_docs.append(doc._to_db_data())
-            else:
-                raw_docs.append(doc)
-        
-        db = cls._get_db()
-        ids = await db.insertMany(cls.__collection__, raw_docs, batch_size)
-        return [db.denormalizeId(i) for i in ids]
-    
-    @classmethod
-    async def updateMany(
-        cls,
-        query: Dict[str, Any],
-        update: Dict[str, Any]
-    ) -> int:
-        """Update multiple documents."""
-        db = cls._get_db()
-        return await db.updateMany(cls.__collection__, query, update)
-    
-    @classmethod
-    async def deleteMany(cls, query: Dict[str, Any]) -> int:
-        """Delete multiple documents."""
-        db = cls._get_db()
-        return await db.deleteMany(cls.__collection__, query)
-    
-    @classmethod
-    async def count(cls, query: Optional[Dict[str, Any]] = None) -> int:
-        """Count documents."""
-        db = cls._get_db()
-        return await db.count(cls.__collection__, query or {})
-    
-    @classmethod
-    async def aggregate(cls, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Run aggregation pipeline."""
-        db = cls._get_db()
-        return await db.aggregate(cls.__collection__, pipeline)
-    
-    @classmethod
-    async def createTable(cls) -> None:
-        """Create the table/collection for this model."""
-        schema = {}
-        for name, field in cls._fields.items():
-            field_type = "string"
-            cls_name = field.__class__.__name__
-            
-            if "Integer" in cls_name or "ForeignKey" in cls_name:
-                field_type = "integer"
-            elif "Boolean" in cls_name:
-                field_type = "boolean"
-            elif "Float" in cls_name:
-                field_type = "float"
-            elif "Date" in cls_name:
-                if "Time" in cls_name:
-                    field_type = "datetime"
-                else:
-                    field_type = "date"
-            elif "JSON" in cls_name:
-                field_type = "json"
-            elif "Array" in cls_name:
-                field_type = "array"
-            
-            spec = {
-                "type": field_type,
-                "primary_key": field.primary_key,
-                "unique": field.unique,
-                "default": field.default,
-            }
-            if not field.nullable:
-                spec["required"] = True
-            
-            if hasattr(field, "auto_increment") and field.auto_increment:
-                spec["auto_increment"] = True
-                
-            schema[name] = spec
-            
-        db = cls._get_db()
-        await db.createCollection(cls.__collection__, schema)
+            # Install Query Proxy on the class
+            if parser_field_name not in namespace:
+                setattr(cls, parser_field_name, ColumnExpression(parser_field_name))
+
+class Model(BaseModel, metaclass=ModelMetaclass):
+    """
+    Base ORM Model compatible with Pydantic and Tabernacle Engines.
+    """
+    # Internal state
+    _persisted: bool = False
+    _connection_override: Any = None # For session support
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        # Mark as persisted if ID is present
+        pk = self.get_pk_field()
+        if pk and getattr(self, pk) is not None:
+             self._persisted = True
 
     @classmethod
-    def _get_db(cls):
-        """Get database connection."""
+    def get_pk_field(cls) -> Optional[str]:
+        return cls._tabernacle_meta["primary_key"]
+
+    @classmethod
+    def get_table_name(cls) -> str:
+        return cls._tabernacle_meta["table_name"]
+
+    @classmethod
+    def get_engine(cls):
+        """Get the active engine."""
         conn = get_connection()
-        if not conn or not conn.is_connected:
-            raise RuntimeError("Database not connected")
-        
+        if not conn or not conn.engine:
+            raise RuntimeError("Database not connected. Call connect() first.")
+        # Support read/write splitting conceptually here if needed
         return conn.engine
 
+    # ----- Query API -----
 
-class EmbeddedModel(Model):
-    """
-    Model meant to be embedded in another document.
-    Does not have a collection or direct CRUD (save/delete).
-    """
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Embedded models don't have _is_new tracking in the same way
-        # But fields still track modifications
-    
-    async def save(self):
-        raise NotImplementedError("EmbeddedModel cannot be saved directly")
-    
-    async def delete(self):
-        raise NotImplementedError("EmbeddedModel cannot be deleted directly")
+    @classmethod
+    def all(cls: Type[T]) -> QuerySet[T]:
+        return QuerySet(cls)
+
+    @classmethod
+    def filter(cls: Type[T], *args, **kwargs) -> QuerySet[T]:
+        qs = QuerySet(cls)
+        if args:
+            qs = qs.filter_expr(*args)
+        if kwargs:
+            qs = qs.filter(**kwargs)
+        return qs
+
+    @classmethod
+    def get(cls: Type[T], **kwargs) -> Coroutine[Any, Any, Optional[T]]:
+        return cls.filter(**kwargs).first()
+
+    @classmethod
+    def create(cls: Type[T], **kwargs) -> Coroutine[Any, Any, T]:
+        async def _create():
+            instance = cls(**kwargs)
+            await instance.save()
+            return instance
+        return _create()
+
+    # ----- CRUD -----
+
+    async def save(self, session: Any = None) -> None:
+        """Save the object (Insert or Update)."""
+        is_create = not self._persisted
+        
+        await self.before_save()
+        if is_create:
+            await self.before_create()
+        
+        # Determine engine or session connection
+        engine = self.get_engine()
+        session_conn = None
+        if session:
+            # Assumes session object has 'connection' attribute
+            if hasattr(session, "connection"):
+                session_conn = session.connection
+            else:
+                session_conn = session # Raw connection passed?
+
+        conn_arg = {"_connection": session_conn} if session_conn else {}
+        
+        data = self.model_dump(exclude_unset=True)
+        cleaned = {}
+        pk = self.get_pk_field()
+        
+        for k, v in data.items():
+            if k in self._tabernacle_meta["relationships"]:
+                continue
+            if k == pk and v is None and is_create:
+                continue
+            cleaned[k] = v
+
+        if is_create:
+            new_id = await engine.insertOne(self.get_table_name(), cleaned, **conn_arg)
+            if pk:
+                # If engine returns ID (string or int), set it
+                # Ensure type matches field annotation? Pydantic validation handles assignment?
+                # We bypass validation for speed or re-validate
+                setattr(self, pk, new_id)
+            self._persisted = True
+            await self.after_create()
+        else:
+            if not pk:
+                raise ValueError("Cannot update model without primary key.")
+            query = {pk: getattr(self, pk)}
+            await engine.updateOne(self.get_table_name(), query, cleaned, **conn_arg)
+        
+        await self.after_save()
+
+    async def delete(self, session: Any = None) -> None:
+        """Delete from DB."""
+        if not self._persisted:
+            return
+        
+        await self.before_delete()
+        
+        engine = self.get_engine()
+        session_conn = session.connection if session and hasattr(session, "connection") else session
+        conn_arg = {"_connection": session_conn} if session_conn else {}
+
+        pk = self.get_pk_field()
+        query = {pk: getattr(self, pk)}
+        
+        await engine.deleteOne(self.get_table_name(), query, **conn_arg)
+        self._persisted = False
+        
+        await self.after_delete()
+
+    @classmethod
+    def _resolve_model(cls, model_ref: Any) -> Type["Model"]:
+        """Resolve string model reference to class."""
+        if isinstance(model_ref, type) and issubclass(model_ref, Model):
+            return model_ref
+        if isinstance(model_ref, str):
+            # Simple resolution: look in same module or global registry
+            # For now, require it to be imported/available or use registry
+            # minimal implementation: check globals of the defining module?
+            # Better: use a global ORM registry. 
+            from ..core.registry import get_model
+            m = get_model(model_ref)
+            if m: return m
+        raise ValueError(f"Could not resolve model '{model_ref}'")
+
+    async def fetch_related(self, field_name: str) -> Any:
+        """
+        Lazy load a relationship.
+        e.g. posts = await user.fetch_related("posts")
+        """
+        meta = self._tabernacle_meta
+        if field_name not in meta["relationships"]:
+             raise AttributeError(f"'{field_name}' is not a registered relationship on {self.__class__.__name__}")
+        
+        rel_info = meta["relationships"][field_name]
+        # rel_info is a RelationshipInfo object
+        
+        target_model = self._resolve_model(rel_info.link_model)
+        
+        # Determine relationship type
+        # 1. OneToMany (Reverse of FK)
+        #    Target model should have a FK pointing to us.
+        #    We need the field name on Target that points to us.
+        
+        # If back_populates is explicit:
+        remote_field = rel_info.back_populates
+        
+        # Heuristic if not explicit:
+        if not remote_field:
+            # Assume target has 'user_id' if we are 'User'
+            remote_field = f"{self.__class__.__name__.lower()}_id"
+            
+        # Check if it's ManyToMany (TODO) or OneToMany
+        # For now assume OneToMany for list results
+        
+        # Check if target has this field
+        # If target has a ForeignKey pointing to us, it's OneToMany
+        # If we have a ForeignKey pointing to target, it's ManyToOne (belongs_to)
+        
+        # Case A: We have a FK pointing to them (ManyToOne/OneToOne)
+        # Check if 'field_name' corresponds to a local FK column? 
+        # Usually Relationships are virtual. The FK column is 'author_id', relation is 'author'.
+        
+        # Check internal columns for FK
+        my_fk = None
+        for col_name, col_args in meta["columns"].items():
+            if col_args.get("foreign_key") == target_model.__name__: # or match table?
+                # This logic is fuzzy without stricter definitions. 
+                # Let's rely on naming convention: field_name + "_id"
+                if f"{field_name}_id" == col_name or field_name == col_name.replace("_id",""):
+                     my_fk = col_name
+                     break
+        
+        # If we found a local FK, it's a BelongsTo
+        if hasattr(self, f"{field_name}_id"):
+             fk_val = getattr(self, f"{field_name}_id")
+             if fk_val is None: return None
+             return await target_model.get(id=fk_val)
+
+        # Case B: OneToMany (They point to us)
+        # We query Target where target.remote_field == self.id
+        # Verify target has that field
+        # We can try to query.
+        pk = self.get_pk_field()
+        my_id = getattr(self, pk)
+        
+        return await target_model.filter({remote_field: my_id}).all()
+    async def before_save(self): pass
+    async def after_save(self): pass
+    async def before_create(self): pass
+    async def after_create(self): pass
+    async def before_delete(self): pass
+    async def after_delete(self): pass
+
+class EmbeddedModel(BaseModel):
+    """Simple embedded model for NoSQL usage."""
+    pass

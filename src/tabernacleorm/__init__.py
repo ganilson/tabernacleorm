@@ -27,7 +27,7 @@ from .fields import (
 from .query.queryset import QuerySet
 from .models.hooks import hook
 
-__version__ = "2.0.0"
+__version__ = "2.1.2"
 __author__ = "Ganilson Garcia"
 __all__ = [
     # Connection
