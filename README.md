@@ -36,8 +36,8 @@ from typing import Optional
 from tabernacleorm import Model, connect
 from tabernacleorm.fields import StringField, IntegerField, ForeignKey, OneToMany
 
-# Connect to DB (Postgres, MySQL, or SQLite)
-connect("sqlite:///:memory:")
+# Connect to DB with auto table creation
+connect("sqlite:///:memory:", auto_create=True)
 
 class User(Model):
     name: str = StringField(max_length=50)
@@ -62,9 +62,8 @@ class Post(Model):
 import asyncio
 
 async def main():
-    # Create Tables
-    await User.get_engine().executeRaw(User.get_create_table_sql())
-    await Post.get_engine().executeRaw(Post.get_create_table_sql())
+    # Create Tables (Handled by auto_create=True, or use migrations in prod)
+    # await User.get_engine().executeRaw(User.get_create_table_sql())
 
     # Create Records
     user = await User.create(name="alice", age=30)
@@ -88,8 +87,27 @@ asyncio.run(main())
 
 ## Documentation
 
-*   **[FEATURES.md](FEATURES.md)** - Detailed guide on Mongoose-style features, advanced populate/include, and complex query operators.
-*   **[REPLICA_QUICKSTART.md](REPLICA_QUICKSTART.md)** - Guide for using Read Replicas.
+*   **[Feature Guide (FEATURES.md)](https://github.com/ganilson/tabernacleorm/blob/main/FEATURES.md)** - Detailed Mongoose-style features, advanced populate/include.
+*   **[Read Replica Quickstart](https://github.com/ganilson/tabernacleorm/blob/main/REPLICA_QUICKSTART.md)** - Guide for using Read Replicas.
+*   **[MongoDB Replicas](https://github.com/ganilson/tabernacleorm/blob/main/MONGODB_REPLICAS.md)** - High Availability guide.
+*   **[Replica Control](https://github.com/ganilson/tabernacleorm/blob/main/READ_REPLICA_CONTROL.md)** - granular control over reads.
+
+## New in 2.1.3: Weighted Load Balancing ⚖️
+
+You can now assign weights to read replicas to distribute traffic according to server capacity.
+
+```python
+db = connect(
+    engine="postgresql",
+    write={"url": "postgresql://master:5432/db"},
+    read=[
+        # Heavy server gets 70% of traffic
+        {"url": "postgresql://huge-replica:5432/db", "weight": 70},
+        # Smaller server gets 30%
+        {"url": "postgresql://small-replica:5432/db", "weight": 30}
+    ]
+)
+```
 
 ## Advanced Features
 

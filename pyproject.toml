@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabernacleorm"
-version = "2.1.3"
+version = "2.1.4"
 description = "A unified, multi-engine async ORM for Python (MongoDB, PostgreSQL, MySQL, SQLite)"
 readme = "README.md"
 license = {text = "MIT"}

@@ -396,6 +396,42 @@ class BaseEngine(ABC):
     
     # ==================== Utilities ====================
     
+    def generateCreateTableSQL(self, table_name: str, columns: List[Dict[str, Any]]) -> str:
+        """
+        Generate CREATE TABLE SQL statement.
+        Can be overridden by dialects.
+        """
+        cols_sql = []
+        for col in columns:
+            stmt = f"{col['name']} {col['type']}"
+            if col.get("primary_key"):
+                if self.engineName == "sqlite" and col['type'] == "INTEGER":
+                    stmt += " PRIMARY KEY AUTOINCREMENT"
+                else:
+                    stmt += " PRIMARY KEY"
+            if col.get("nullable") is False:
+                stmt += " NOT NULL"
+            if col.get("unique"):
+                 stmt += " UNIQUE"
+            # Foreign Key logic would go here ideally or in separate constraints
+            cols_sql.append(stmt)
+        
+        # Add Foreign Keys
+        for col in columns:
+            fk = col.get("foreign_key")
+            if fk:
+                # FK syntax: FOREIGN KEY (col) REFERENCES table(id)
+                ref_table = fk if "." not in fk else fk.split(".")[0]
+                # Try to guess table name pluralization if just model name
+                # Simple heuristic: lowercase + s
+                if not ref_table.islower():
+                     ref_table = ref_table.lower() + "s"
+                     
+                stmt = f"FOREIGN KEY ({col['name']}) REFERENCES {ref_table}(id)" # assume id for now
+                cols_sql.append(stmt)
+
+        return f"CREATE TABLE IF NOT EXISTS {table_name} ({', '.join(cols_sql)});"
+
     @abstractmethod
     async def executeRaw(
         self,

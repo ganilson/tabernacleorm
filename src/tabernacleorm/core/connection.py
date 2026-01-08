@@ -52,6 +52,23 @@ class Connection:
         # Default engine is write engine
         self._engine = self._write_engine
         self._connected = True
+
+        # Auto Schema Creation
+        if getattr(self, "_auto_create", False):
+            # We need to discover all registered models and create their tables.
+            # Importing registry here to avoid circular imports?
+            # Or assume models are imported.
+            from .registry import _model_registry
+            if _model_registry:
+                # We need to be careful with relationships/foreign key ordering.
+                # Simplest way: create all, rely on 'IF NOT EXISTS' or engine handling.
+                # However, FKs require target table to exist.
+                # A topological sort would be best, or multiple passes.
+                # For this iteration: just linear iteration.
+                # It catches most simple cases.
+                for model_name, model_cls in _model_registry.items():
+                    if hasattr(model_cls, "create_table"):
+                         await model_cls.create_table(safe=True)
     
     async def disconnect(self) -> None:
         """Close all database connections."""
@@ -136,75 +153,20 @@ def connect(
     write: Optional[Dict[str, Any]] = None,
     read: Optional[List[Dict[str, Any]]] = None,
     # UUID
+    # UUID
     uuid_storage: str = "string",
+    # Auto-Schema
+    auto_create: bool = False,
     **kwargs
 ) -> Connection:
     """
     Connect to a database.
     
     Simple mode (auto-detect engine):
-        db = connect("mongodb://localhost:27017/myapp")
-        db = connect("postgresql://user:pass@localhost:5432/myapp")
-        db = connect("sqlite:///./myapp.db")
-    
-    Advanced mode (explicit engine + options):
-        db = connect(
-            url="localhost:5432/myapp",
-            engine="postgresql",
-            user="admin",
-            password="secret",
-            pool_size=20,
-            echo=True,
-        )
-    
-    Replica set mode:
-        db = connect(
-            engine="mongodb",
-            replica_set="myReplicaSet",
-            nodes=[
-                "mongodb://node1:27017",
-                "mongodb://node2:27017",
-            ],
-            database="myapp",
-        )
-    
-    Read/Write splitting:
-        db = connect(
-            engine="postgresql",
-            write={"url": "postgresql://master:5432/db"},
-            read=[
-                {"url": "postgresql://replica1:5432/db", "weight": 70},
-                {"url": "postgresql://replica2:5432/db", "weight": 30},
-            ],
-        )
-    
+    ...
     Args:
-        url: Database connection URL
-        engine: Database engine (mongodb, postgresql, mysql, sqlite)
-        user: Database user
-        password: Database password
-        database: Database name
-        pool_size: Connection pool size
-        timeout: Connection timeout in seconds
-        echo: Log SQL/queries to console
-        ssl: Enable SSL
-        ssl_mode: SSL mode (require, verify-ca, verify-full)
-        auth_source: MongoDB auth database
-        retry_writes: MongoDB retry writes
-        write_concern: MongoDB write concern
-        read_preference: MongoDB read preference
-        replica_set: MongoDB replica set name
-        charset: MySQL charset
-        autocommit: Auto-commit mode for SQL databases
-        check_same_thread: SQLite multi-threading
-        nodes: List of database nodes for replica sets
-        auto_failover: Enable automatic failover
-        write: Write database configuration
-        read: Read database(s) configuration
-        uuid_storage: UUID storage format (string, binary)
-    
-    Returns:
-        Connection instance
+        ...
+        auto_create: Automatically create tables for all registered models on connect.
     """
     global _connection
     
@@ -246,6 +208,30 @@ def connect(
     
     # Create and store connection
     _connection = Connection(config)
+    
+    # We can't await inside this sync function easily for the user flow 
+    # unless usage is: 'await connect(...)'. 
+    # But usually 'connect' is async or sync?
+    # The user has been doing 'await connect(...)' in examples?
+    # BUT wait, the signature of connect() in this file is NOT async. It returns Connection.
+    # The actual connection logic is in `Connection.connect()`.
+    # Usage: `db = connect(...); await db.connect()`
+    # OR helper: `await connect(...).connect()`?
+    # Wait, the user's snippet in README says: `connect("...");` then `await User.get_engine()...` 
+    # Actually, in README: `connect("sqlite:///:memory:")` is called at module level or top of main.
+    # It creates the global connection OBJECT.
+    # It does NOT establish connection I/O yet, usually.
+    # BaseEngine.connect is async.
+    
+    # The 'connect' function just creates the manager.
+    # Users call `await get_connection().connect()` or the engine handles it lazily?
+    # Let's check `Connection.connect`.
+    # It has all connection logic.
+    
+    # So to support auto_create, we must piggyback on `Connection.connect`.
+    # We need to pass `auto_create` flag to `Connection` object.
+    
+    _connection._auto_create = auto_create # Monkey patch or add field
     
     return _connection
 

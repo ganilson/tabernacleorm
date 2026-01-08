@@ -277,6 +277,57 @@ class Model(BaseModel, metaclass=ModelMetaclass):
         my_id = getattr(self, pk)
         
         return await target_model.filter({remote_field: my_id}).all()
+    @classmethod
+    def get_create_table_sql(cls) -> str:
+        """Generate SQL to create table for this model."""
+        # This is a bit tricky because SQL generation depends on dialect (Postgres vs MySQL vs SQLite)
+        #Ideally, we ask the engine to generate it.
+        # But for now, we provide a generic SQL generation helper OR delegate to engine.
+        # Let's delegate to a new engine method `generateCreateTableSQL`.
+        # This requires engine support.
+        
+        # Simplified: Return a structure the engine can use, or string.
+        # Let's construct a schema dict and pass it to engine.createCollection logic
+        
+        # Actually, let's look at BaseEngine.createCollection. It takes a schema dict?
+        # No, createCollection(name, schema) is there.
+        # So we don't return SQL string directly to user usually, unless debug.
+        # But user code has executeRaw(User.get_create_table_sql()).
+        # Let's support that by asking the connected engine.
+        
+        engine = cls.get_engine()
+        # We need to construct a generic schema definition from _tabernacle_meta
+        meta = cls._tabernacle_meta
+        columns = []
+        for name, args in meta["columns"].items():
+            col_type = args.get("sa_type", "TEXT")
+            # Enhance type mapping if needed
+            
+            definition = {"name": name, "type": col_type}
+            if args.get("primary_key"): definition["primary_key"] = True
+            if args.get("nullable") is False: definition["nullable"] = False
+            if args.get("unique"): definition["unique"] = True
+            if args.get("default") is not None: definition["default"] = args["default"]
+            if args.get("foreign_key"): definition["foreign_key"] = args["foreign_key"]
+            
+            columns.append(definition)
+            
+        return engine.generateCreateTableSQL(meta["table_name"], columns)
+
+    @classmethod
+    async def create_table(cls, safe: bool = True):
+        """Create table in DB."""
+        sql = cls.get_create_table_sql()
+        engine = cls.get_engine()
+        # Wrap in try/except if safe=True to ignore "exists" error, or adding IF NOT EXISTS in SQL
+        if safe and "IF NOT EXISTS" not in sql.upper():
+             # Basic injection, dependent on dialect
+             # Better: check existence first
+             if await engine.collectionExists(cls.get_table_name()):
+                 return
+        
+        await engine.executeRaw(sql)
+
     async def before_save(self): pass
     async def after_save(self): pass
     async def before_create(self): pass
